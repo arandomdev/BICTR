@@ -1,2 +1,2 @@
 # LunarWirelessChannel
-Wireless channel model for lunar enviorments. Part of the 5G-MOSAIC project
+Wireless channel model for lunar environments. Part of the 5G-MOSAIC project.
