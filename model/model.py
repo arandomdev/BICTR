@@ -10,6 +10,8 @@ TX_COORD = (0, 0, 2)
 RX_COORD = (20, 17, 1.5)
 REFLECTION_COORD = (18, 14, 0)
 
+RELATIVE_PERMITTIVITY = 2.75 / sci_consts.epsilon_0  # NU-LHT-2M real permittivity
+
 FS = 12e9
 
 TX_FREQ = 1e9  # 1Ghz
@@ -45,9 +47,18 @@ def twoRay() -> npt.NDArray[np.complex64]:
         txSig * np.exp(-1j * 2 * np.pi * losDist / waveLength) / losDist
     )
 
+    # Compute reflection coefficient, assume horizontal polarization
+    reflectAngle = np.arcsin(TX_COORD[2] / np.linalg.norm(txLoc - reflectLoc))
+    reflectPolarization = np.sqrt(
+        RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngle))
+    )
+    reflectCoeff = (np.sin(reflectAngle) - reflectPolarization) / (
+        np.sin(reflectAngle) + reflectPolarization
+    )
+
     delaySpread = (reflectDist - losDist) / sci_consts.speed_of_light
     delaySamples = int(np.round(delaySpread * FS))
-    reflectSig = (waveLength / 4 / np.pi) * (
+    reflectSig = (waveLength * reflectCoeff / 4 / np.pi) * (
         np.pad(txSig, (delaySamples, 0), "constant")
         * np.exp(-1j * 2 * np.pi * reflectDist / waveLength)
         / reflectDist
@@ -78,9 +89,20 @@ def multipath() -> npt.NDArray[np.complex64]:
     losPl = freeSpacePathloss(TX_FREQ, losDist)
     reflectPl = freeSpacePathloss(TX_FREQ, reflectDist)
 
+    # Compute reflection coefficient
+    reflectAngle = np.arcsin(TX_COORD[2] / np.linalg.norm(txLoc - reflectLoc))
+    reflectPolarization = np.sqrt(
+        RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngle))
+    )
+    reflectCoeff = (np.sin(reflectAngle) - reflectPolarization) / (
+        np.sin(reflectAngle) + reflectPolarization
+    )
+
     # Compute phasors
     losPhasor = losPl * np.exp(-1j * 2 * np.pi * TX_FREQ * losDelay)
-    reflectPhasor = reflectPl * np.exp(-1j * 2 * np.pi * TX_FREQ * reflectDelay)
+    reflectPhasor = (
+        reflectPl * reflectCoeff * np.exp(-1j * 2 * np.pi * TX_FREQ * reflectDelay)
+    )
 
     # Construct fir delay taps
     # longest delay -> filter length
