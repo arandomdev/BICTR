@@ -6,9 +6,11 @@ from typing import Any, cast
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+import pygmt  # type: ignore
 import scipy.constants as sci_consts  # type: ignore
 import scipy.interpolate  # type: ignore
 import scipy.io  # type: ignore
+import xarray
 
 
 @dataclass
@@ -32,42 +34,63 @@ class Point3D(object):
 
 
 @dataclass
-class ReflectorPoint(object):
-    loc: Point3D
-    angle: float  # angle in radians that was used to generate the location
+class PointGeo(object):
+    lon: float
+    lat: float
+
+    def __array__(
+        self, dtype: None = None, copy: bool | None = None
+    ) -> npt.NDArray[np.float64]:
+        del copy
+
+        return np.array((self.lon, self.lat), dtype=dtype)
 
 
 @dataclass
 class TransmitSignal(object):
     wave: npt.NDArray[np.float64]
+    time: npt.NDArray[np.float64]
     fs: float
     carrierFs: float
 
     symbolStarts: list[int] | None
 
 
+@dataclass
+class ReceiveSignal(object):
+    wave: npt.NDArray[np.complex128]
+    time: npt.NDArray[np.float64]
+
+
 RANDOM_SEED = "0c4d0fd7-8776-4e90-8d80-86f65bc1cbc5"
 
+MOON_RADIUS = 1737.4e3
+
 # XYZ coordinates in meters
-TX_COORD = Point3D(x=0, y=0, z=2)
-RX_COORD = Point3D(x=100, y=0, z=1.5)
+TX_COORD = PointGeo(lon=0, lat=-89.9999)
+TX_HEIGHT = 2
+RX_COORD = PointGeo(lon=0, lat=-88)
+RX_HEIGHT = 2
 
 # Reflector params
 # List of tuples, of ring radius in meters and number of reflectors per ring
 RING_CONFIG = (
-    (1, 3),
+    (10000, 10),
+    (20000, 20),
     # (20, 5),
     # (40, 7),
     # (60, 9),
     # (80, 13),
 )
+RING_UNCERTAINTY = 0.1  # +- random offset to radius
 
 # Rayleigh Params
-FADING_MAX_DOPPLER_SPEED = 0  # m/s
-FADING_N_PATHS = 64  # Should be a multiple of 4
+FADING_MAX_DOPPLER_SPEED = 1  # m/s
+FADING_N_PATHS = 1024  # Should be a multiple of 4
+FADING_POWER = -80  # gain of the rayleigh fading channel in dBm
 
 # Ground reflection params
-RELATIVE_PERMITTIVITY = 2.75 / sci_consts.epsilon_0  # NU-LHT-2M real permittivity
+COMPLEX_RELATIVE_PERMITTIVITY = 2.75 + 0.13j  # from NU-LHT-2M study
 
 # 5G data from Matlab params
 GEN_DATA_FILE = pathlib.Path(R"model/data/data.mat")
@@ -114,7 +137,7 @@ def freeSpacePathloss[T: Any](
     return sci_consts.speed_of_light / (4 * np.pi * dist * freq)
 
 
-def load5gTxSignal() -> TransmitSignal:
+def load5gSignal() -> TransmitSignal:
     """Retrieves the IQ samples and the carrier frequency"""
     # Load baseband and metadata
     file = scipy.io.loadmat(str(GEN_DATA_FILE))  # type: ignore
@@ -136,8 +159,13 @@ def load5gTxSignal() -> TransmitSignal:
         basebandUpsampled * np.exp(1j * 2 * np.pi * carrierFreq * passbandTime)
     ).real
 
+    t = np.arange(0, len(passbandSamples)) / GEN_FS
     return TransmitSignal(
-        wave=passbandSamples, fs=GEN_FS, carrierFs=carrierFreq, symbolStarts=None
+        wave=passbandSamples,
+        time=t,
+        fs=GEN_FS,
+        carrierFs=carrierFreq,
+        symbolStarts=None,
     )
 
 
@@ -146,8 +174,10 @@ def generateImpulseSignal() -> TransmitSignal:
 
     sig = np.zeros(IMPULSE_LENGTH)
     sig[0] = amp
+
+    t = np.arange(0, len(sig)) / IMPULSE_FS
     return TransmitSignal(
-        wave=sig, fs=IMPULSE_FS, carrierFs=IMPULSE_CARR_FS, symbolStarts=None
+        wave=sig, time=t, fs=IMPULSE_FS, carrierFs=IMPULSE_CARR_FS, symbolStarts=None
     )
 
 
@@ -169,7 +199,11 @@ def generateBPSKSignal() -> TransmitSignal:
     t = np.arange(0, len(phasesUpsampled)) / BPSK_FS
     signal = amp * np.cos((2 * np.pi * BPSK_CARR_FS * t) + phasesUpsampled)
     return TransmitSignal(
-        wave=signal, fs=BPSK_FS, carrierFs=BPSK_CARR_FS, symbolStarts=symbolStarts
+        wave=signal,
+        time=t,
+        fs=BPSK_FS,
+        carrierFs=BPSK_CARR_FS,
+        symbolStarts=symbolStarts,
     )
 
 
@@ -191,27 +225,77 @@ def generateQPSKSignal() -> TransmitSignal:
     t = np.arange(0, len(phasesUpsampled)) / QPSK_FS
     signal = amp * np.cos((2 * np.pi * QPSK_CARR_FS * t) + phasesUpsampled)
     return TransmitSignal(
-        wave=signal, fs=QPSK_FS, carrierFs=QPSK_CARR_FS, symbolStarts=symbolStarts
+        wave=signal,
+        time=t,
+        fs=QPSK_FS,
+        carrierFs=QPSK_CARR_FS,
+        symbolStarts=symbolStarts,
     )
 
 
-def generateReflectors() -> list[ReflectorPoint]:
-    reflectors: list[ReflectorPoint] = []
+def computeDestination(loc: PointGeo, bearing: float, distance: float) -> PointGeo:
+    """Compute the destination location with bearing and distance.
+
+    Args:
+        bearing: direction of travel in radians
+        distance: distance of travel in meters
+    """
+    dist = distance / MOON_RADIUS
+    lon1 = np.deg2rad(loc.lon)
+    lat1 = np.deg2rad(loc.lat)
+
+    lat2 = np.asin(
+        np.sin(lat1) * np.cos(dist) + np.cos(lat1) * np.sin(dist) * np.cos(bearing)
+    )
+
+    lon2 = lon1 + np.atan2(
+        np.sin(bearing) * np.sin(dist) * np.cos(lat1),
+        np.cos(dist) - np.sin(lat1) * np.sin(lat2),
+    )
+    return PointGeo(lon=np.rad2deg(lon2), lat=np.rad2deg(lat2))
+
+
+def geoTo3D(coord: PointGeo, heightBias: float = 0) -> Point3D:
+    inc = np.deg2rad(90 - coord.lat)
+    azi = np.deg2rad(coord.lon)
+    height = MOON_RADIUS + heightBias
+    x = height * np.sin(inc) * np.cos(azi)
+    y = height * np.sin(inc) * np.sin(azi)
+    z = height * np.cos(inc)
+    return Point3D(x=x, y=y, z=z)
+
+
+def generateReflectors(
+    moonGrid: xarray.DataArray,
+) -> tuple[list[Point3D], list[PointGeo]]:
+    rCoords: list[PointGeo] = []
     for ringRadius, points in RING_CONFIG:
         for _ in range(points):
-            # Random angle
-            # TODO: Randomness in radius
+            # Random angle and radius
+            r = random.uniform(
+                ringRadius - RING_UNCERTAINTY, ringRadius + RING_UNCERTAINTY
+            )
             theta = random.uniform(0, 2 * np.pi)
-            x = ringRadius * np.cos(theta) + RX_COORD.x
-            y = ringRadius * np.sin(theta) + RX_COORD.y
-            z = 0
-            reflectors.append(ReflectorPoint(loc=Point3D(x=x, y=y, z=z), angle=theta))
-    return reflectors
+
+            rCoord = computeDestination(RX_COORD, theta, r)
+            rCoords.append(rCoord)
+
+    # Get heights for each loc
+    heights = cast(
+        npt.NDArray[np.float64],
+        pygmt.grdtrack(  # type: ignore
+            moonGrid, points=np.array(rCoords), z_only=True, output_type="numpy"
+        )[:, 0],  # type: ignore
+    )
+
+    # Convert to from Geo to 3D
+    rPoints = [geoTo3D(coord, h) for coord, h in zip(rCoords, heights)]
+    return rPoints, rCoords
 
 
 def computeDelaySamples(fs: float, delay: float | np.floating[Any]) -> int:
     """Compute the number of delay samples given the sampling freq and delay time."""
-    return int(np.floor(delay * fs))
+    return int(np.round(delay * fs))
 
 
 def generateRayleighFading(
@@ -250,25 +334,26 @@ def generateRayleighFading(
         sig += 1j * np.sin(psi) * np.cos(wd * t * np.cos(angle) + phi)
 
     # Normalize
-    sig *= 2 / np.sqrt(m)
+    gain = np.power(10, FADING_POWER / 20) * np.sqrt(1e-3) / np.sqrt(m)
+    sig *= 2 * gain / np.sqrt(m)
 
     return sig
 
 
 def twoRay(
-    txSig: TransmitSignal, reflectors: list[ReflectorPoint]
+    txLoc: Point3D, rxLoc: Point3D, txSig: TransmitSignal, reflectors: list[Point3D]
 ) -> npt.NDArray[np.complex128]:
-    reflectLoc = reflectors[0].loc  # Use the first one
+    reflectLoc = reflectors[0]  # Use the first one
 
     txWave = txSig.wave
     fs = txSig.fs
     carrFs = txSig.carrierFs
 
     # Get path distances
-    losDist = np.linalg.norm(TX_COORD - RX_COORD)
-    reflectDist = np.linalg.norm(TX_COORD - reflectLoc) + np.linalg.norm(
-        reflectLoc - RX_COORD
-    )
+    losDist = np.linalg.norm(txLoc - rxLoc)
+    txToRefDist = np.linalg.norm(txLoc - reflectLoc)
+    refToRxDist = np.linalg.norm(reflectLoc - rxLoc)
+    reflectDist = txToRefDist + refToRxDist
 
     # Compute los component
     waveLength = sci_consts.speed_of_light / carrFs
@@ -276,10 +361,18 @@ def twoRay(
         txWave * np.exp(-1j * 2 * np.pi * losDist / waveLength) / losDist
     )
 
+    # Compute angle of reflection with law of cosines
+    reflectAngle = (
+        np.pi
+        - np.arccos(
+            (np.square(txToRefDist) + np.square(refToRxDist) - np.square(losDist))
+            / (2 * txToRefDist * refToRxDist)
+        )
+    ) / 2
+
     # Compute reflection coefficient, assume horizontal polarization
-    reflectAngle = np.arcsin(TX_COORD.z / np.linalg.norm(TX_COORD - reflectLoc))
     reflectPolarization = np.sqrt(
-        RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngle))
+        COMPLEX_RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngle))
     )
     reflectCoeff = (np.sin(reflectAngle) - reflectPolarization) / (
         np.sin(reflectAngle) + reflectPolarization
@@ -298,22 +391,26 @@ def twoRay(
 
 
 def model(
+    txLoc: Point3D,
+    rxLoc: Point3D,
     txSig: TransmitSignal,
-    reflectors: list[ReflectorPoint],
+    reflectors: list[Point3D],
     removeLosDelay: bool = False,
-) -> tuple[npt.NDArray[np.complex128], npt.NDArray[np.complex128]]:
+) -> tuple[ReceiveSignal, npt.NDArray[np.complex128]]:
     txWave = txSig.wave
     fs = txSig.fs
     carrFs = txSig.carrierFs
 
+    txLocArr = np.array(txLoc)
+    rxLocArr = np.array(rxLoc)
+
     # Get path distances
-    losDist = np.linalg.norm(TX_COORD - RX_COORD)
-    reflectDists = np.array(
-        [
-            np.linalg.norm(TX_COORD - r.loc) + np.linalg.norm(r.loc - RX_COORD)
-            for r in reflectors
-        ]
-    )
+    losDist = np.linalg.norm(txLocArr - rxLocArr)
+
+    refsArr = np.array(reflectors)
+    txToRefDists = np.linalg.norm(txLocArr - refsArr, axis=1)
+    refToRxDists = np.linalg.norm(refsArr - rxLocArr, axis=1)
+    reflectDists = txToRefDists + refToRxDists
 
     # Compute time delay
     losDelay = losDist / sci_consts.speed_of_light
@@ -323,12 +420,18 @@ def model(
     losPl = freeSpacePathloss(carrFs, losDist)
     reflectPls = np.array([freeSpacePathloss(carrFs, d) for d in reflectDists])
 
+    # Compute reflection angle with law of cosines
+    reflectAngles = (
+        np.pi
+        - np.arccos(
+            (np.square(txToRefDists) + np.square(refToRxDists) - np.square(losDist))
+            / (2 * txToRefDists * refToRxDists)
+        )
+    ) / 2
+
     # Compute reflection coefficient
-    reflectAngles = np.arcsin(
-        TX_COORD.z / np.array([np.linalg.norm(TX_COORD - r.loc) for r in reflectors])
-    )
     reflectPolarizations = np.sqrt(
-        RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngles))
+        COMPLEX_RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngles))
     )
     reflectCoeffs = (np.sin(reflectAngles) - reflectPolarizations) / (
         np.sin(reflectAngles) + reflectPolarizations
@@ -357,10 +460,12 @@ def model(
 
     # Add rayleigh
     rayleighSig = generateRayleighFading(txSig, len(firCoeffs))
+    # TODO: This might require more normalization, maybe instead of fading power, split it across the taps?
     firCoeffs += rayleighSig
 
     # Pass signal through filter
-    return np.convolve(firCoeffs, txWave), rayleighSig
+    rxWave = np.convolve(firCoeffs, txWave)
+    return ReceiveSignal(wave=rxWave, time=np.arange(0, len(rxWave)) / fs), rayleighSig
 
 
 def computeDB(sig: npt.NDArray[Any]) -> npt.NDArray[np.float64]:
@@ -421,15 +526,65 @@ def computeSNR(txSig: npt.NDArray[np.float64], rxSig: npt.NDArray[np.complex128]
 def main() -> None:
     random.seed(RANDOM_SEED)
 
-    txSig = generateBPSKSignal()
-    reflectors = generateReflectors()
-    twoRaySig = twoRay(txSig, reflectors)
-    rxSig, rayleighSig = model(txSig, reflectors, removeLosDelay=True)
+    # txSig = generateImpulseSignal()
+    # txSig = generateBPSKSignal()
+    txSig = generateQPSKSignal()
+    # txSig = load5gSignal()
 
-    snr = computeSNR(txSig.wave, rxSig)
+    # load moon DEM
+    moonGrid = pygmt.datasets.load_moon_relief(
+        resolution="01m", region=[-180, 180, -90, -85], registration="gridline"
+    )
 
-    nGraphs = 7
-    fig, axs = plt.subplots(nGraphs, sharex=True)  # type: ignore
+    txHeight, rxHeight = cast(
+        tuple[float, float],
+        pygmt.grdtrack(  # type: ignore
+            moonGrid,
+            points=np.array((TX_COORD, RX_COORD)),
+            z_only=True,
+            output_type="numpy",
+        )[:, 0],
+    )
+    txLoc = geoTo3D(TX_COORD, txHeight + TX_HEIGHT)
+    rxLoc = geoTo3D(RX_COORD, rxHeight + RX_HEIGHT)
+
+    refPoints, refCoords = generateReflectors(moonGrid)
+
+    twoRaySig = twoRay(txLoc, rxLoc, txSig, refPoints)
+    rxSig, rayleighSig = model(txLoc, rxLoc, txSig, refPoints, removeLosDelay=True)
+
+    snr = computeSNR(txSig.wave, rxSig.wave)
+
+    # generate map
+    fig = pygmt.Figure()
+    fig.grdimage(grid=moonGrid, projection="G00/-90/12c", frame="afg")  # type: ignore
+
+    refCoordsArr = np.array(refCoords)
+    fig.plot(  # type: ignore
+        x=refCoordsArr[:, 0],
+        y=refCoordsArr[:, 1],
+        style="c0.2c",
+        fill="white",
+        pen="black",
+    )
+    fig.plot(  # type: ignore
+        x=TX_COORD.lon,
+        y=TX_COORD.lat,
+        style="i0.3c",
+        fill="green",
+        pen="black",
+    )
+    fig.plot(  # type: ignore
+        x=RX_COORD.lon,
+        y=RX_COORD.lat,
+        style="i0.3c",
+        fill="red",
+        pen="black",
+    )
+    fig.show()  # type: ignore
+
+    nGraphs = 3
+    fig, axs = plt.subplots(nGraphs, figsize=(20, 16))  # type: ignore
     axsGen = (a for a in axs)
 
     ax = next(axsGen)
@@ -440,39 +595,48 @@ def main() -> None:
     ax.set_ylabel("Power [dBm]")
 
     ax = next(axsGen)
-    ax.plot(computeDBM(rxSig))
+    ax.plot(rxSig.time, computeDBM(rxSig.wave))
     if SHOW_RX_SENSITIVITY:
         ax.axhline(RX_SENSITIVITY, color="red")
     ax.set_title("Rx Signal")
+    ax.set_xlabel("Time (s)")
     ax.set_ylabel("Power [dBm]")
 
-    ax = next(axsGen)
-    ax.plot(snr)
-    ax.set_title("SNR [dBm]????")
+    # ax = next(axsGen)
+    # ax.plot(snr)
+    # ax.set_title("SNR [dBm]????")
 
     ax = next(axsGen)
     ax.plot(computeDBM(txSig.wave))
     ax.set_title("Tx Signal")
     ax.set_ylabel("Power [dBm]")
 
-    ax = next(axsGen)
-    ax.plot(txSig.wave)
-    ax.set_title("Tx Signal")
-    ax.set_ylabel("Amplitude [V]")
-    for ss in txSig.symbolStarts or []:
-        ax.axvline(ss, color="red")
+    # ax = next(axsGen)
+    # ax.plot(txSig.time, txSig.wave)
+    # ax.set_title("Tx Signal")
+    # ax.set_xlabel("Time (s)")
+    # ax.set_ylabel("Amplitude [V]")
+    # for ss in txSig.symbolStarts or []:
+    #     ax.axvline(ss / txSig.fs, color="red")
 
-    ax = next(axsGen)
-    ax.plot(np.real(rxSig))
-    ax.set_title("Rx Signal")
-    ax.set_ylabel("Amplitude [V]")
+    # ax = next(axsGen)
+    # ax.plot(rxSig.time, np.real(rxSig.wave))
+    # ax.set_title("Rx Signal")
+    # ax.set_xlabel("Time (s)")
+    # ax.set_ylabel("Amplitude [V]")
 
-    ax = next(axsGen)
-    ax.plot(np.real(rayleighSig))
-    ax.set_title("Rayleigh Signal")
-    ax.ticklabel_format(useOffset=False)
-    ax.set_ylabel("Amplitude [V]")
+    # ax = next(axsGen)
+    # ax.plot(np.real(rayleighSig))
+    # ax.set_title("Rayleigh Signal")
+    # ax.set_ylabel("Amplitude [V]")
 
+    # ax = next(axsGen)
+    # ax.plot(computeDB(rayleighSig))
+    # ax.set_title("Rayleigh Signal")
+    # ax.set_ylabel("Power [dB]")
+    # print(np.sqrt(np.mean(np.square(np.square(np.abs(rayleighSig))))))
+
+    fig.tight_layout()
     fig.show()
     plt.show()  # type: ignore
 
