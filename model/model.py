@@ -50,11 +50,21 @@ RANDOM_SEED = "0c4d0fd7-8776-4e90-8d80-86f65bc1cbc5"
 
 # XYZ coordinates in meters
 TX_COORD = Point3D(x=0, y=0, z=2)
-RX_COORD = Point3D(x=20, y=17, z=1.5)
+RX_COORD = Point3D(x=100, y=0, z=1.5)
 
 # Reflector params
 # List of tuples, of ring radius in meters and number of reflectors per ring
-RING_CONFIG = ((1, 1),)
+RING_CONFIG = (
+    (1, 3),
+    # (20, 5),
+    # (40, 7),
+    # (60, 9),
+    # (80, 13),
+)
+
+# Rayleigh Params
+FADING_MAX_DOPPLER_SPEED = 0  # m/s
+FADING_N_PATHS = 64  # Should be a multiple of 4
 
 # Ground reflection params
 RELATIVE_PERMITTIVITY = 2.75 / sci_consts.epsilon_0  # NU-LHT-2M real permittivity
@@ -64,6 +74,12 @@ GEN_DATA_FILE = pathlib.Path(R"model/data/data.mat")
 GEN_POINT_A = 3e9
 GEN_SCS_BANDWIDTH = 50e6
 GEN_FS = 7e9
+
+# Impulse signal parameters
+IMPULSE_TRANSMIT_POWER = 20  # Transmit power in dBm
+IMPULSE_FS = 3e9
+IMPULSE_CARR_FS = 500e6
+IMPULSE_LENGTH = 100  # Number of samples
 
 # BPSK signal parameters
 BPSK_TRANSMIT_POWER = 20  # Transmit power in dBm
@@ -87,6 +103,8 @@ QPSK_SYMBOL_PERIOD = 6e-6
 # BW=50mHz, SCS=15kHz, F<3GHz
 RX_SENSITIVITY = -86.6
 SHOW_RX_SENSITIVITY = True
+
+LOG_ZERO_STUB = -100  # Value to show when taking log of 0
 
 
 def freeSpacePathloss[T: Any](
@@ -120,6 +138,16 @@ def load5gTxSignal() -> TransmitSignal:
 
     return TransmitSignal(
         wave=passbandSamples, fs=GEN_FS, carrierFs=carrierFreq, symbolStarts=None
+    )
+
+
+def generateImpulseSignal() -> TransmitSignal:
+    amp = np.power(10, IMPULSE_TRANSMIT_POWER / 20) * np.sqrt(1e-3)
+
+    sig = np.zeros(IMPULSE_LENGTH)
+    sig[0] = amp
+    return TransmitSignal(
+        wave=sig, fs=IMPULSE_FS, carrierFs=IMPULSE_CARR_FS, symbolStarts=None
     )
 
 
@@ -172,6 +200,7 @@ def generateReflectors() -> list[ReflectorPoint]:
     for ringRadius, points in RING_CONFIG:
         for _ in range(points):
             # Random angle
+            # TODO: Randomness in radius
             theta = random.uniform(0, 2 * np.pi)
             x = ringRadius * np.cos(theta) + RX_COORD.x
             y = ringRadius * np.sin(theta) + RX_COORD.y
@@ -186,11 +215,43 @@ def computeDelaySamples(fs: float, delay: float | np.floating[Any]) -> int:
 
 
 def generateRayleighFading(
-    reflectors: list[ReflectorPoint], length: int
+    txSig: TransmitSignal, length: int
 ) -> npt.NDArray[np.complex128]:
-    sig = np.zeros(length, dtype=np.complex128)
+    """Generate Rayleigh fading signal
+    Model from https://doi.org/10.1109/TCOMM.2003.813259
+    """
+
+    m = FADING_N_PATHS // 4
+
+    t = np.arange(0, length) / txSig.fs
+    wd = (
+        2
+        * np.pi
+        * FADING_MAX_DOPPLER_SPEED
+        * txSig.carrierFs
+        / sci_consts.speed_of_light
+    )
 
     # Generate real component
+    sig = np.zeros(length, dtype=np.complex128)
+    for n in range(1, m + 1):
+        theta = random.uniform(-np.pi, np.pi)
+        phi = random.uniform(-np.pi, np.pi)
+        psi = random.uniform(-np.pi, np.pi)
+        angle = (2 * np.pi * n - np.pi + theta) / (4 * m)
+        sig += np.cos(psi) * np.cos(wd * t * np.cos(angle) + phi)
+
+    # Imaginary component
+    for n in range(1, m + 1):
+        theta = random.uniform(-np.pi, np.pi)
+        phi = random.uniform(-np.pi, np.pi)
+        psi = random.uniform(-np.pi, np.pi)
+        angle = (2 * np.pi * n - np.pi + theta) / (4 * m)
+        sig += 1j * np.sin(psi) * np.cos(wd * t * np.cos(angle) + phi)
+
+    # Normalize
+    sig *= 2 / np.sqrt(m)
+
     return sig
 
 
@@ -236,11 +297,11 @@ def twoRay(
     return np.pad(losSig, (0, len(reflectSig) - len(losSig)), "constant") + reflectSig
 
 
-def multipath(
+def model(
     txSig: TransmitSignal,
     reflectors: list[ReflectorPoint],
     removeLosDelay: bool = False,
-) -> npt.NDArray[np.complex128]:
+) -> tuple[npt.NDArray[np.complex128], npt.NDArray[np.complex128]]:
     txWave = txSig.wave
     fs = txSig.fs
     carrFs = txSig.carrierFs
@@ -294,18 +355,39 @@ def multipath(
     if removeLosDelay:
         firCoeffs = firCoeffs[losDelaySamples:]
 
+    # Add rayleigh
+    rayleighSig = generateRayleighFading(txSig, len(firCoeffs))
+    firCoeffs += rayleighSig
+
     # Pass signal through filter
-    return np.convolve(firCoeffs, txWave)
+    return np.convolve(firCoeffs, txWave), rayleighSig
 
 
 def computeDB(sig: npt.NDArray[Any]) -> npt.NDArray[np.float64]:
     """Compute the power of a signal in dB"""
-    return np.multiply(np.log10(np.square(np.abs(sig))), 10)
+    mag = np.square(np.abs(sig))
+    return np.multiply(
+        np.log10(
+            mag,
+            out=np.full(mag.shape, LOG_ZERO_STUB / 10, dtype=np.float64),
+            where=(mag != 0),
+        ),
+        10,
+    )
 
 
 def computeDBM(sig: npt.NDArray[Any]) -> npt.NDArray[np.float64]:
     """Compute the power of a signal in dBm"""
-    return np.multiply(np.log10(np.square(np.abs(sig)) / 1e-3), 10)
+    mag = np.square(np.abs(sig)) / 1e-3
+
+    return np.multiply(
+        np.log10(
+            mag,
+            out=np.full(mag.shape, LOG_ZERO_STUB / 10, dtype=np.float64),
+            where=(mag != 0),
+        ),
+        10,
+    )
 
 
 def computeSNR(txSig: npt.NDArray[np.float64], rxSig: npt.NDArray[np.complex128]):
@@ -339,51 +421,57 @@ def computeSNR(txSig: npt.NDArray[np.float64], rxSig: npt.NDArray[np.complex128]
 def main() -> None:
     random.seed(RANDOM_SEED)
 
-    txSig = generateQPSKSignal()
+    txSig = generateBPSKSignal()
     reflectors = generateReflectors()
     twoRaySig = twoRay(txSig, reflectors)
-    multipathSig = multipath(txSig, reflectors, removeLosDelay=True)
+    rxSig, rayleighSig = model(txSig, reflectors, removeLosDelay=True)
 
-    snr = computeSNR(txSig.wave, multipathSig)
+    snr = computeSNR(txSig.wave, rxSig)
 
-    nGraphs = 6
+    nGraphs = 7
     fig, axs = plt.subplots(nGraphs, sharex=True)  # type: ignore
     axsGen = (a for a in axs)
 
     ax = next(axsGen)
-    ax.plot(computeDBM(twoRaySig))  # type: ignore
+    ax.plot(computeDBM(twoRaySig))
     if SHOW_RX_SENSITIVITY:
-        ax.axhline(RX_SENSITIVITY, color="red")  # type: ignore
-    ax.set_title("Two Ray")  # type: ignore
-    ax.set_ylabel("Power [dBm]")  # type: ignore
+        ax.axhline(RX_SENSITIVITY, color="red")
+    ax.set_title("Two Ray")
+    ax.set_ylabel("Power [dBm]")
 
     ax = next(axsGen)
-    ax.plot(computeDBM(multipathSig))  # type: ignore
+    ax.plot(computeDBM(rxSig))
     if SHOW_RX_SENSITIVITY:
-        ax.axhline(RX_SENSITIVITY, color="red")  # type: ignore
-    ax.set_title("Multipath")  # type: ignore
-    ax.set_ylabel("Power [dBm]")  # type: ignore
+        ax.axhline(RX_SENSITIVITY, color="red")
+    ax.set_title("Rx Signal")
+    ax.set_ylabel("Power [dBm]")
 
     ax = next(axsGen)
-    ax.plot(snr)  # type: ignore
-    ax.set_title("SNR [dBm]????")  # type: ignore
+    ax.plot(snr)
+    ax.set_title("SNR [dBm]????")
 
     ax = next(axsGen)
-    ax.plot(computeDBM(txSig.wave))  # type: ignore
-    ax.set_title("Tx Signal")  # type: ignore
-    ax.set_ylabel("Power [dBm]")  # type: ignore
+    ax.plot(computeDBM(txSig.wave))
+    ax.set_title("Tx Signal")
+    ax.set_ylabel("Power [dBm]")
 
     ax = next(axsGen)
-    ax.plot(txSig.wave)  # type: ignore
-    ax.set_title("Tx Signal")  # type: ignore
-    ax.set_ylabel("Amplitude [V]")  # type: ignore
+    ax.plot(txSig.wave)
+    ax.set_title("Tx Signal")
+    ax.set_ylabel("Amplitude [V]")
     for ss in txSig.symbolStarts or []:
         ax.axvline(ss, color="red")
 
     ax = next(axsGen)
-    ax.plot(np.real(multipathSig))  # type: ignore
-    ax.set_title("Multipath Signal")  # type: ignore
-    ax.set_ylabel("Amplitude [V]")  # type: ignore
+    ax.plot(np.real(rxSig))
+    ax.set_title("Rx Signal")
+    ax.set_ylabel("Amplitude [V]")
+
+    ax = next(axsGen)
+    ax.plot(np.real(rayleighSig))
+    ax.set_title("Rayleigh Signal")
+    ax.ticklabel_format(useOffset=False)
+    ax.set_ylabel("Amplitude [V]")
 
     fig.show()
     plt.show()  # type: ignore
