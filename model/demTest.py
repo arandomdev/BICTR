@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 import pygmt
+import xarray
 from pygmt.datasets import load_moon_relief
 
 MOON_RADIUS = 1737.4e3
@@ -62,14 +63,18 @@ def computeDest(lng: float, lat: float, bearing: float, distance: float) -> Poin
     lat = np.deg2rad(lat)
     bearing = np.deg2rad(bearing)
 
-    lat2 = np.asin(
-        np.sin(lat) * np.cos(dist) + np.cos(lat) * np.sin(dist) * np.cos(bearing)
-    )
+    if lat == np.pi / 2 or lat == -np.pi / 2:
+        lng2 = bearing
+        lat2 = np.pi / 2 - dist if lat == 90 else -np.pi / 2 + dist
+    else:
+        lat2 = np.asin(
+            np.sin(lat) * np.cos(dist) + np.cos(lat) * np.sin(dist) * np.cos(bearing)
+        )
 
-    lng2 = lng + np.atan2(
-        np.sin(bearing) * np.sin(dist) * np.cos(lat),
-        np.cos(dist) - np.sin(lat) * np.sin(lat2),
-    )
+        lng2 = lng + np.atan2(
+            np.sin(bearing) * np.sin(dist) * np.cos(lat),
+            np.cos(dist) - np.sin(lat) * np.sin(lat2),
+        )
     return PointGeo(lng=np.rad2deg(lng2), lat=np.rad2deg(lat2))
 
 
@@ -89,29 +94,30 @@ def main() -> None:
         registration="gridline",
     )
 
-    points = generatePoints()
-    pointsArr = np.array(points)
+    data = xarray.DataArray(
+        [[1, 2, 3, 4], [11, 12, 13, 14], [21, 22, 23, 24], [31, 32, 33, 34]],
+        dims=("lat", "lon"),
+        coords={"lon": [-180, -90, 0, 90], "lat": [-89, -88, -87, -86]},
+    )
 
     fig = pygmt.Figure()
-    fig.grdimage(grid=grid, projection="G00/-90/12c", frame="afg")
-    fig.plot(
-        x=pointsArr[:, 0], y=pointsArr[:, 1], style="c0.3c", fill="white", pen="black"
+    # fig.grdimage(grid=grid, projection="G00/-90/12c", frame="afg", monochrome=True)
+    fig.grdview(
+        grid=grid,
+        drapegrid=data,
+        plane="+gdarkgray",
+        projection="G00/-90/12c",
+        cmap=True,
+        frame="afg",
+        shading=True,
+        surftype="i",
     )
+    # fig.plot(
+    #     x=pointsArr[:, 0], y=pointsArr[:, 1], style="c0.3c", fill="white", pen="black"
+    # )
     fig.show()
     pass
 
 
-def test() -> None:
-    for i in range(4):
-        print(computeDest(0, 90, 360 / 4 * i, 2 * np.pi * MOON_RADIUS / 360))
-        pass
-
-    print()
-    for i in range(4):
-        print(computeDest(0, -90, 360 / 4 * i, 2 * np.pi * MOON_RADIUS / 360))
-        pass
-
-
 if __name__ == "__main__":
-    # test()
     main()

@@ -1,6 +1,12 @@
+import multiprocessing as mp
+import multiprocessing.queues as mpq
+import multiprocessing.synchronize as mps
 import pathlib
+import queue
 import random
+import signal
 from dataclasses import dataclass
+from types import FrameType, TracebackType
 from typing import Any, cast
 
 import matplotlib.pyplot as plt
@@ -45,6 +51,21 @@ class PointGeo(object):
 
         return np.array((self.lon, self.lat), dtype=dtype)
 
+    def __eq__(self, value: object) -> bool:
+        if isinstance(value, PointGeo):
+            if (self.lat == 90 and value.lat == 90) or (
+                self.lat == -90 and value.lat == -90
+            ):
+                # Poles
+                return True
+            elif self.lat == value.lat and abs(self.lon) == abs(value.lon):
+                # Longitude crossing
+                return True
+            else:
+                return self.lat == value.lat and self.lon == value.lon
+        else:
+            return False
+
 
 @dataclass
 class TransmitSignal(object):
@@ -62,21 +83,47 @@ class ReceiveSignal(object):
     time: npt.NDArray[np.float64]
 
 
+class DelayedKeyboardInterrupt:
+    def __enter__(self):
+        self.signalReceived = None
+
+        self.oldHandler = signal.signal(signal.SIGINT, self.handler)
+
+    def handler(self, sig: int, frame: FrameType | None) -> None:
+        self.signalReceived = (sig, frame)
+
+    def __exit__(
+        self,
+        type: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        signal.signal(signal.SIGINT, self.oldHandler)
+        if self.signalReceived:
+            self.oldHandler(*self.signalReceived)  # type: ignore
+
+
 RANDOM_SEED = "0c4d0fd7-8776-4e90-8d80-86f65bc1cbc5"
 
 MOON_RADIUS = 1737.4e3
 
-# XYZ coordinates in meters
-TX_COORD = PointGeo(lon=0, lat=-89.9999)
+TX_COORD = PointGeo(lon=0, lat=-90)
 TX_HEIGHT = 2
 RX_COORD = PointGeo(lon=0, lat=-88)
 RX_HEIGHT = 2
 
+SCAN_RESULTS_PATH = pathlib.Path(R"data/scanMap.nc")
+SCAN_REGION = (PointGeo(lon=0, lat=-89.9), PointGeo(lon=180, lat=-89.3))
+SCAN_BLOCK_SIZE = 0.02  # Block size in degrees
+VIEW_REGION = (PointGeo(lon=-180, lat=-90), PointGeo(lon=180, lat=-89))
+
 # Reflector params
 # List of tuples, of ring radius in meters and number of reflectors per ring
 RING_CONFIG = (
-    (10000, 10),
-    (20000, 20),
+    (5, 5),
+    (10, 10),
+    # (10000, 10),
+    # (20000, 20),
     # (20, 5),
     # (40, 7),
     # (60, 9),
@@ -244,14 +291,19 @@ def computeDestination(loc: PointGeo, bearing: float, distance: float) -> PointG
     lon1 = np.deg2rad(loc.lon)
     lat1 = np.deg2rad(loc.lat)
 
-    lat2 = np.asin(
-        np.sin(lat1) * np.cos(dist) + np.cos(lat1) * np.sin(dist) * np.cos(bearing)
-    )
+    if loc.lat == 90 or loc.lat == -90:
+        lon2 = bearing
+        lat2 = np.pi / 2 - dist if loc.lat == 90 else -np.pi / 2 + dist
+    else:
+        lat2 = np.asin(
+            np.sin(lat1) * np.cos(dist) + np.cos(lat1) * np.sin(dist) * np.cos(bearing)
+        )
 
-    lon2 = lon1 + np.atan2(
-        np.sin(bearing) * np.sin(dist) * np.cos(lat1),
-        np.cos(dist) - np.sin(lat1) * np.sin(lat2),
-    )
+        lon2 = lon1 + np.atan2(
+            np.sin(bearing) * np.sin(dist) * np.cos(lat1),
+            np.cos(dist) - np.sin(lat1) * np.sin(lat2),
+        )
+
     return PointGeo(lon=np.rad2deg(lon2), lat=np.rad2deg(lat2))
 
 
@@ -266,7 +318,7 @@ def geoTo3D(coord: PointGeo, heightBias: float = 0) -> Point3D:
 
 
 def generateReflectors(
-    moonGrid: xarray.DataArray,
+    moonGrid: xarray.DataArray, receiverCoord: PointGeo
 ) -> tuple[list[Point3D], list[PointGeo]]:
     rCoords: list[PointGeo] = []
     for ringRadius, points in RING_CONFIG:
@@ -277,7 +329,7 @@ def generateReflectors(
             )
             theta = random.uniform(0, 2 * np.pi)
 
-            rCoord = computeDestination(RX_COORD, theta, r)
+            rCoord = computeDestination(receiverCoord, theta, r)
             rCoords.append(rCoord)
 
     # Get heights for each loc
@@ -461,7 +513,7 @@ def model(
     # Add rayleigh
     rayleighSig = generateRayleighFading(txSig, len(firCoeffs))
     # TODO: This might require more normalization, maybe instead of fading power, split it across the taps?
-    firCoeffs += rayleighSig
+    # firCoeffs += rayleighSig
 
     # Pass signal through filter
     rxWave = np.convolve(firCoeffs, txWave)
@@ -523,12 +575,19 @@ def computeSNR(txSig: npt.NDArray[np.float64], rxSig: npt.NDArray[np.complex128]
     return snr
 
 
+def computeRmsDBM(rxSig: npt.NDArray[np.complex128]) -> float:
+    """Compute the VRms and return it in dBm."""
+
+    vRms = np.sqrt(np.mean(np.square(np.abs(rxSig))))
+    return 30 + 20 * np.log10(vRms)  # 1ohm impedance
+
+
 def main() -> None:
     random.seed(RANDOM_SEED)
 
     # txSig = generateImpulseSignal()
-    # txSig = generateBPSKSignal()
-    txSig = generateQPSKSignal()
+    txSig = generateBPSKSignal()
+    # txSig = generateQPSKSignal()
     # txSig = load5gSignal()
 
     # load moon DEM
@@ -548,7 +607,7 @@ def main() -> None:
     txLoc = geoTo3D(TX_COORD, txHeight + TX_HEIGHT)
     rxLoc = geoTo3D(RX_COORD, rxHeight + RX_HEIGHT)
 
-    refPoints, refCoords = generateReflectors(moonGrid)
+    refPoints, refCoords = generateReflectors(moonGrid, RX_COORD)
 
     twoRaySig = twoRay(txLoc, rxLoc, txSig, refPoints)
     rxSig, rayleighSig = model(txLoc, rxLoc, txSig, refPoints, removeLosDelay=True)
@@ -641,5 +700,365 @@ def main() -> None:
     plt.show()  # type: ignore
 
 
+def scanRegion() -> None:
+    moonGrid = pygmt.datasets.load_moon_relief(
+        resolution="01m",
+        region=[
+            VIEW_REGION[0].lon,
+            VIEW_REGION[1].lon,
+            VIEW_REGION[0].lat,
+            VIEW_REGION[1].lat,
+        ],
+        registration="gridline",
+    )
+
+    # generate list of transceiver locations
+    transceivers: list[PointGeo] = [TX_COORD]
+    lonAxis = np.arange(SCAN_REGION[0].lon, SCAN_REGION[1].lon, SCAN_BLOCK_SIZE)
+    latAxis = np.arange(SCAN_REGION[0].lat, SCAN_REGION[1].lat, SCAN_BLOCK_SIZE)
+    for lon in lonAxis:
+        for lat in latAxis:
+            point = PointGeo(lon=lon, lat=lat)
+            if point != TX_COORD:
+                transceivers.append(point)
+
+    # Get heights for each transceiver
+    transceiverHeights = cast(
+        npt.NDArray[np.float64],
+        pygmt.grdtrack(  # type: ignore
+            moonGrid,
+            points=np.array(transceivers),
+            z_only=True,
+            output_type="numpy",
+        )[:, 0],
+    )
+
+    # Convert to Point3D
+    txLoc = geoTo3D(transceivers[0], transceiverHeights[0] + TX_HEIGHT)
+    receiverLocs = [
+        geoTo3D(c, h + RX_HEIGHT)
+        for c, h in zip(transceivers[1:], transceiverHeights[1:])
+    ]
+
+    txSig = generateBPSKSignal()
+
+    # Load results file
+    if not SCAN_RESULTS_PATH.exists():
+        results = xarray.DataArray(
+            dims=["lat", "lon"],
+            coords={
+                "lon": lonAxis,
+                "lat": latAxis,
+            },
+        )
+        results.to_netcdf(SCAN_RESULTS_PATH)  # type: ignore
+    else:
+        with xarray.open_dataarray(SCAN_RESULTS_PATH) as da:  # type: ignore
+            results = da.load()  # type: ignore
+
+    # process each receiver
+    writeTimer = 0
+    for rxLoc, rxCoord in zip(receiverLocs, transceivers[1:]):
+        if not np.isnan(results.loc[rxCoord.lat, rxCoord.lon]):  # type: ignore
+            continue
+
+        reflectorLocs = generateReflectors(moonGrid, rxCoord)[0]
+        rxSig = model(txLoc, rxLoc, txSig, reflectorLocs, True)[0]
+        rxStrength = computeRmsDBM(rxSig.wave)
+
+        results.loc[rxCoord.lat, rxCoord.lon] = rxStrength  # type: ignore
+        print(f"Processed {rxCoord}")
+
+        writeTimer = (writeTimer + 1) % 100
+        if writeTimer == 0:
+            with DelayedKeyboardInterrupt():
+                results.to_netcdf(SCAN_RESULTS_PATH)  # type: ignore
+
+    with DelayedKeyboardInterrupt():
+        results.to_netcdf(SCAN_RESULTS_PATH)  # type: ignore
+
+
+def scanRegionMultiWorkerInit(_resultsMem: Any, _cancelEvent: mps.Event) -> None:
+    global resultsMem
+    global cancelEvent
+    resultsMem = _resultsMem
+    cancelEvent = _cancelEvent
+
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def scanRegionMultiWorker(
+    txLoc: Point3D,
+    tasks: list[tuple[Point3D, PointGeo]],
+    updateQueue: mpq.Queue[int],
+) -> None:
+    """Child process to scan a region
+
+    Args:
+        txLoc: The transmitter location
+        tasks: A list of receiver locations
+        cancelEvent: A event to cancel the child process and exit
+        updateQueue: A feed back mechanism that reports how many tasks were processed
+            since the last update from this process
+    """
+
+    moonGrid = pygmt.datasets.load_moon_relief(
+        resolution="01m",
+        region=[
+            VIEW_REGION[0].lon,
+            VIEW_REGION[1].lon,
+            VIEW_REGION[0].lat,
+            VIEW_REGION[1].lat,
+        ],
+        registration="gridline",
+    )
+
+    # Construct dataarray from shared memory
+    lonAxis = np.arange(SCAN_REGION[0].lon, SCAN_REGION[1].lon, SCAN_BLOCK_SIZE)
+    latAxis = np.arange(SCAN_REGION[0].lat, SCAN_REGION[1].lat, SCAN_BLOCK_SIZE)
+
+    resultsArr = np.frombuffer(resultsMem, dtype=np.float64)
+    resultsArr = resultsArr.reshape((len(latAxis), len(lonAxis)))
+
+    results = xarray.DataArray(
+        resultsArr,
+        dims=["lat", "lon"],
+        coords={
+            "lon": lonAxis,
+            "lat": latAxis,
+        },
+    )
+
+    txSig = generateBPSKSignal()
+
+    tasksProcessed = 0
+
+    for rxLoc, rxCoord in tasks:
+        reflectorLocs = generateReflectors(moonGrid, rxCoord)[0]
+        rxSig = model(txLoc, rxLoc, txSig, reflectorLocs, True)[0]
+        rxStrength = computeRmsDBM(rxSig.wave)
+
+        results.loc[rxCoord.lat, rxCoord.lon] = rxStrength  # type: ignore
+
+        # check cancel and update
+        if cancelEvent.is_set():
+            break
+
+        tasksProcessed += 1
+        if tasksProcessed == 25:
+            updateQueue.put(tasksProcessed)
+            tasksProcessed = 0
+
+    # Final update before exiting
+    updateQueue.put(tasksProcessed)
+
+
+def scanRegionMulti() -> None:
+    print("Initializing")
+    moonGrid = pygmt.datasets.load_moon_relief(
+        resolution="01m",
+        region=[
+            VIEW_REGION[0].lon,
+            VIEW_REGION[1].lon,
+            VIEW_REGION[0].lat,
+            VIEW_REGION[1].lat,
+        ],
+        registration="gridline",
+    )
+
+    # generate list of transceiver locations
+    transceivers: list[PointGeo] = [TX_COORD]
+    lonAxis = np.arange(SCAN_REGION[0].lon, SCAN_REGION[1].lon, SCAN_BLOCK_SIZE)
+    latAxis = np.arange(SCAN_REGION[0].lat, SCAN_REGION[1].lat, SCAN_BLOCK_SIZE)
+    for lon in lonAxis:
+        for lat in latAxis:
+            point = PointGeo(lon=lon, lat=lat)
+            if point != TX_COORD:
+                transceivers.append(point)
+
+    # Get heights for each transceiver
+    transceiverHeights = cast(
+        npt.NDArray[np.float64],
+        pygmt.grdtrack(  # type: ignore
+            moonGrid,
+            points=np.array(transceivers),
+            z_only=True,
+            output_type="numpy",
+        )[:, 0],
+    )
+
+    # Convert to Point3D
+    txLoc = geoTo3D(transceivers[0], transceiverHeights[0] + TX_HEIGHT)
+    receiverLocs = [
+        geoTo3D(c, h + RX_HEIGHT)
+        for c, h in zip(transceivers[1:], transceiverHeights[1:])
+    ]
+
+    # Load results into shared memory
+    if not SCAN_RESULTS_PATH.exists():
+        results = xarray.DataArray(
+            dims=["lat", "lon"],
+            coords={
+                "lon": lonAxis,
+                "lat": latAxis,
+            },
+        )
+        results.to_netcdf(SCAN_RESULTS_PATH)  # type: ignore
+    else:
+        with xarray.open_dataarray(SCAN_RESULTS_PATH) as da:  # type: ignore
+            results = da.load()  # type: ignore
+
+    resultsMem = mp.RawArray("b", results.nbytes)
+    resultsArr = np.frombuffer(resultsMem, dtype=np.float64)
+    resultsArr = resultsArr.reshape((len(latAxis), len(lonAxis)))
+    np.copyto(resultsArr, results)
+
+    # Replace data array with shared mem
+    results = xarray.DataArray(
+        resultsArr,
+        dims=["lat", "lon"],
+        coords={
+            "lon": lonAxis,
+            "lat": latAxis,
+        },
+    )
+
+    # Generate tasks
+    tasks: list[tuple[Point3D, PointGeo]] = []
+    for rxLoc, rxCoord in zip(receiverLocs, transceivers[1:]):
+        if np.isnan(results.loc[rxCoord.lat, rxCoord.lon]):  # type: ignore
+            tasks.append((rxLoc, rxCoord))
+
+    nWorkers = mp.cpu_count()
+    cancelEvent = mp.Event()
+
+    with mp.Pool(
+        nWorkers, scanRegionMultiWorkerInit, initargs=(resultsMem, cancelEvent)
+    ) as pool:
+        tasksComplete = 0
+        mpManager = mp.Manager()
+        updateQueue = cast(mpq.Queue[int], mpManager.Queue())
+
+        # Split tasks and create process arguments
+        procArgs: list[
+            tuple[
+                Point3D,
+                list[tuple[Point3D, PointGeo]],
+                mpq.Queue[int],
+            ]
+        ] = []
+        chunkSize, remainder = divmod(len(tasks), nWorkers)
+        if remainder != 0:
+            chunkSize += 1
+
+        for i in range(0, len(tasks), chunkSize):
+            procArgs.append((txLoc, tasks[i : i + chunkSize], updateQueue))
+
+        # create processes
+        processes = pool.starmap_async(scanRegionMultiWorker, procArgs)
+        print("Started workers")
+
+        try:
+            while True:
+                # Check that all processes are alive
+                if processes.ready():
+                    break
+
+                # Update and report counter
+                try:
+                    taskInc = updateQueue.get_nowait()
+                    tasksComplete += taskInc
+                    print(
+                        f"Completed {tasksComplete} of {len(tasks)} tasks, or {tasksComplete/len(tasks)*100:0.2f}%"
+                    )
+                except queue.Empty:
+                    pass
+        except KeyboardInterrupt:
+            print("Stopping workers", flush=True)
+            cancelEvent.set()
+
+            while True:
+                # Check that all processes are alive
+                if processes.ready():
+                    break
+
+                # Update and report counter
+                try:
+                    taskInc = updateQueue.get_nowait()
+                    tasksComplete += taskInc
+                    print(
+                        f"Completed {tasksComplete} of {len(tasks)} tasks, or {tasksComplete/len(tasks)*100:0.2f}%"
+                    )
+                except queue.Empty:
+                    pass
+
+        print("Workers stopped, saving results")
+        with DelayedKeyboardInterrupt():
+            results.to_netcdf(SCAN_RESULTS_PATH)  # type: ignore
+
+        processes.get()  # Propagate any exceptions
+
+    print("Exiting")
+
+
+def showHeatmap() -> None:
+    moonGrid = pygmt.datasets.load_moon_relief(
+        resolution="01m",
+        region=[
+            VIEW_REGION[0].lon,
+            VIEW_REGION[1].lon,
+            VIEW_REGION[0].lat,
+            VIEW_REGION[1].lat,
+        ],
+        registration="gridline",
+    )
+
+    with xarray.open_dataarray(SCAN_RESULTS_PATH) as da:  # type: ignore
+        results = da.load()  # type: ignore
+
+    projection = "G00/-90/12c"
+    fig = pygmt.Figure()
+
+    fig.grdcontour(  # type: ignore
+        grid=moonGrid,
+        # annotation="1000+f8p",  # Annotate contours every 1000 meters
+        pen="0.75p,blue",  # Contour line style
+        projection=projection,
+    )
+
+    # Create a colormap for the secondary data
+    pygmt.makecpt(  # type: ignore
+        cmap="jet",  # Color palette (e.g., jet, viridis, etc.)
+        series=[-109, -65, 0.01],  # Data range [min, max, increment]
+        continuous=True,  # Use continuous colormap
+    )
+
+    # Overlay the secondary data as a color map
+    fig.grdimage(  # type: ignore
+        grid=results,
+        cmap=True,  # Use the previously created colormap
+        transparency=25,  # Optional transparency level (0-100)
+        projection=projection,
+    )
+
+    # Add map frame and labels
+    fig.basemap(  # type: ignore
+        region=[
+            VIEW_REGION[0].lon,
+            VIEW_REGION[1].lon,
+            VIEW_REGION[0].lat,
+            VIEW_REGION[1].lat,
+        ],
+        projection=projection,
+        frame=["a", "+tExample Projection with Bathymetry and Colormap"],
+    )
+
+    fig.show()  # type: ignore
+    pass
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    # scanRegion()
+    scanRegionMulti()
+    showHeatmap()
