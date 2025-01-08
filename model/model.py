@@ -6,6 +6,7 @@ import queue
 import random
 import signal
 from dataclasses import dataclass
+from pprint import pprint
 from types import FrameType, TracebackType
 from typing import Any, cast
 
@@ -109,27 +110,21 @@ MOON_RADIUS = 1737.4e3
 
 TX_COORD = PointGeo(lon=0, lat=-90)
 TX_HEIGHT = 2
-RX_COORD = PointGeo(lon=0, lat=-88)
+RX_COORD = PointGeo(lon=120, lat=-89.5)
 RX_HEIGHT = 2
 
 SCAN_RESULTS_PATH = pathlib.Path(R"data/scanMap.nc")
-SCAN_REGION = (PointGeo(lon=0, lat=-89.9), PointGeo(lon=180, lat=-89.3))
-SCAN_BLOCK_SIZE = 0.02  # Block size in degrees
-VIEW_REGION = (PointGeo(lon=-180, lat=-90), PointGeo(lon=180, lat=-89))
+SCAN_REGION = (PointGeo(lon=-180, lat=-89.99), PointGeo(lon=180, lat=-89))
+SCAN_BLOCK_SIZE = 0.04  # Block size in degrees
+VIEW_REGION = (PointGeo(lon=-180, lat=-90), PointGeo(lon=180, lat=-88.5))
 
 # Reflector params
-# List of tuples, of ring radius in meters and number of reflectors per ring
-RING_CONFIG = (
-    (5, 5),
-    (10, 10),
-    # (10000, 10),
-    # (20000, 20),
-    # (20, 5),
-    # (40, 7),
-    # (60, 9),
-    # (80, 13),
-)
-RING_UNCERTAINTY = 0.1  # +- random offset to radius
+REFLECTOR_COUNT = 5  # max number of reflectors to generate
+REFLECTOR_ATTEMPT_PER_RING = 2
+RING_RADIUS_MIN = 5
+RING_RADIUS_MAX = 500
+RING_COUNT = 10  # Number of rings to try between min and max ring radius
+RING_RADIUS_UNCERTAINTY = 15  # +- random offset to radius
 
 # Rayleigh Params
 FADING_MAX_DOPPLER_SPEED = 1  # m/s
@@ -174,7 +169,9 @@ QPSK_SYMBOL_PERIOD = 6e-6
 RX_SENSITIVITY = -86.6
 SHOW_RX_SENSITIVITY = True
 
-LOG_ZERO_STUB = -100  # Value to show when taking log of 0
+LOG_ZERO_STUB = -150  # Value to show when taking log of 0
+
+N_WORKERS = 22
 
 
 def freeSpacePathloss[T: Any](
@@ -318,31 +315,88 @@ def geoTo3D(coord: PointGeo, heightBias: float = 0) -> Point3D:
 
 
 def generateReflectors(
-    moonGrid: xarray.DataArray, receiverCoord: PointGeo
+    moonGrid: xarray.DataArray, txCoord: PointGeo, rxCoord: PointGeo
 ) -> tuple[list[Point3D], list[PointGeo]]:
     rCoords: list[PointGeo] = []
-    for ringRadius, points in RING_CONFIG:
-        for _ in range(points):
-            # Random angle and radius
+
+    currRadius = RING_RADIUS_MIN
+    radiusStep = (RING_RADIUS_MAX - RING_RADIUS_MIN) / RING_COUNT
+
+    while currRadius <= RING_RADIUS_MAX and len(rCoords) < REFLECTOR_COUNT:
+        for _ in range(REFLECTOR_ATTEMPT_PER_RING):
+            # Try reflector at random radius and angle
             r = random.uniform(
-                ringRadius - RING_UNCERTAINTY, ringRadius + RING_UNCERTAINTY
+                currRadius - RING_RADIUS_UNCERTAINTY,
+                currRadius + RING_RADIUS_UNCERTAINTY,
             )
             theta = random.uniform(0, 2 * np.pi)
+            rCoord = computeDestination(rxCoord, theta, r)
 
-            rCoord = computeDestination(receiverCoord, theta, r)
-            rCoords.append(rCoord)
+            # Check LOS
+            if checkLOS(moonGrid, txCoord, TX_HEIGHT, rCoord, 0) and checkLOS(
+                moonGrid, rCoord, 0, rxCoord, RX_HEIGHT
+            ):
+                rCoords.append(rCoord)
+                if len(rCoords) == REFLECTOR_COUNT:
+                    break
 
-    # Get heights for each loc
-    heights = cast(
+        # Increase radius
+        currRadius += radiusStep
+
+    if rCoords:
+        # Get heights for each loc
+        heights = cast(
+            npt.NDArray[np.float64],
+            pygmt.grdtrack(  # type: ignore
+                moonGrid, points=np.array(rCoords), z_only=True, output_type="numpy"
+            )[:, 0],  # type: ignore
+        )
+
+        # Convert to from Geo to 3D
+        rPoints = [geoTo3D(coord, h) for coord, h in zip(rCoords, heights)]
+        return rPoints, rCoords
+    else:
+        return [], []
+
+
+def checkLOS(
+    moonGrid: xarray.DataArray,
+    start: PointGeo,
+    startHeightBias: float,
+    end: PointGeo,
+    endHeightBias: float,
+) -> bool:
+    """Checks if there is LOS between two Coordinates"""
+
+    # Project from start to end and get terrain height
+    track = pygmt.project(  # type: ignore
+        center=(start.lon, start.lat),
+        endpoint=(end.lon, end.lat),
+        generate=0.1,
+    )
+    trackHeights = cast(
         npt.NDArray[np.float64],
         pygmt.grdtrack(  # type: ignore
-            moonGrid, points=np.array(rCoords), z_only=True, output_type="numpy"
-        )[:, 0],  # type: ignore
+            grid=moonGrid,
+            points=track,
+            z_only=True,
+            output_type="numpy",
+            newcolname="elevation",
+        )[:, 0],
     )
 
-    # Convert to from Geo to 3D
-    rPoints = [geoTo3D(coord, h) for coord, h in zip(rCoords, heights)]
-    return rPoints, rCoords
+    # Check if the signal intersects with terrain
+    los = cast(
+        npt.NDArray[np.float64],
+        np.linspace(
+            trackHeights[0] + startHeightBias,
+            trackHeights[-1] + endHeightBias,
+            len(trackHeights),
+        ),
+    )
+
+    diff = los - trackHeights
+    return diff.min() >= 0
 
 
 def computeDelaySamples(fs: float, delay: float | np.floating[Any]) -> int:
@@ -447,8 +501,8 @@ def model(
     rxLoc: Point3D,
     txSig: TransmitSignal,
     reflectors: list[Point3D],
-    removeLosDelay: bool = False,
-) -> tuple[ReceiveSignal, npt.NDArray[np.complex128]]:
+    hasLOS: bool,
+) -> ReceiveSignal | None:
     txWave = txSig.wave
     fs = txSig.fs
     carrFs = txSig.carrierFs
@@ -456,68 +510,86 @@ def model(
     txLocArr = np.array(txLoc)
     rxLocArr = np.array(rxLoc)
 
-    # Get path distances
+    delayPaths: dict[int, np.complex128] = {}  # delay in filter coeffs: phasor
+
+    # Compute LOS delay path
     losDist = np.linalg.norm(txLocArr - rxLocArr)
+    if hasLOS:
+        losDelay = losDist / sci_consts.speed_of_light
+        losPl = freeSpacePathloss(carrFs, losDist)
+        losPhasor = losPl * np.exp(-1j * 2 * np.pi * carrFs * losDelay)
+        losDelaySamples = computeDelaySamples(fs, losDelay)
+        delayPaths[losDelaySamples] = losPhasor
 
-    refsArr = np.array(reflectors)
-    txToRefDists = np.linalg.norm(txLocArr - refsArr, axis=1)
-    refToRxDists = np.linalg.norm(refsArr - rxLocArr, axis=1)
-    reflectDists = txToRefDists + refToRxDists
+    # Compute reflector delay paths
+    if reflectors:
+        # NOTE: Assumes that all reflectors have LOS from TX to RX, as per implementation
 
-    # Compute time delay
-    losDelay = losDist / sci_consts.speed_of_light
-    reflectDelays = reflectDists / sci_consts.speed_of_light
+        # Get path distances
+        refsArr = np.array(reflectors)
+        txToRefDists = np.linalg.norm(txLocArr - refsArr, axis=1)
+        refToRxDists = np.linalg.norm(refsArr - rxLocArr, axis=1)
+        reflectDists = txToRefDists + refToRxDists
 
-    # Compute pathloss
-    losPl = freeSpacePathloss(carrFs, losDist)
-    reflectPls = np.array([freeSpacePathloss(carrFs, d) for d in reflectDists])
+        # Compute time delay
+        reflectDelays = reflectDists / sci_consts.speed_of_light
 
-    # Compute reflection angle with law of cosines
-    reflectAngles = (
-        np.pi
-        - np.arccos(
-            (np.square(txToRefDists) + np.square(refToRxDists) - np.square(losDist))
-            / (2 * txToRefDists * refToRxDists)
+        # Compute pathloss
+        reflectPls = np.array([freeSpacePathloss(carrFs, d) for d in reflectDists])
+
+        # Compute reflection angle with law of cosines
+        reflectAngles = (
+            np.pi
+            - np.arccos(
+                (np.square(txToRefDists) + np.square(refToRxDists) - np.square(losDist))
+                / (2 * txToRefDists * refToRxDists)
+            )
+        ) / 2
+
+        # Compute reflection coefficient
+        reflectPolarizations = np.sqrt(
+            COMPLEX_RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngles))
         )
-    ) / 2
+        reflectCoeffs = (np.sin(reflectAngles) - reflectPolarizations) / (
+            np.sin(reflectAngles) + reflectPolarizations
+        )
 
-    # Compute reflection coefficient
-    reflectPolarizations = np.sqrt(
-        COMPLEX_RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngles))
-    )
-    reflectCoeffs = (np.sin(reflectAngles) - reflectPolarizations) / (
-        np.sin(reflectAngles) + reflectPolarizations
-    )
+        # Compute phasors
+        reflectPhasors = (
+            reflectPls
+            * reflectCoeffs
+            * np.exp(-1j * 2 * np.pi * carrFs * reflectDelays)
+        )
 
-    # Compute phasors
-    losPhasor = losPl * np.exp(-1j * 2 * np.pi * carrFs * losDelay)
-    reflectPhasors = (
-        reflectPls * reflectCoeffs * np.exp(-1j * 2 * np.pi * carrFs * reflectDelays)
-    )
+        # compute delay indices
+        reflectDelaysSamples = [computeDelaySamples(fs, d) for d in reflectDelays]
 
-    # compute delay indices
-    losDelaySamples = computeDelaySamples(fs, losDelay)
-    reflectDelaysSamples = np.array([computeDelaySamples(fs, d) for d in reflectDelays])
+        for delay, phasor in zip(reflectDelaysSamples, reflectPhasors):
+            if delay in delayPaths:
+                delayPaths[delay] += phasor
+            else:
+                delayPaths[delay] = phasor
 
-    # Construct fir delay taps
-    # longest delay -> filter length
-    firCoeffs = np.zeros(reflectDelaysSamples.max() + 1, dtype=np.complex64)
-    firCoeffs[losDelaySamples] = losPhasor
-    for delay, phasor in zip(reflectDelaysSamples, reflectPhasors):
-        # Add phasors in the case that there are duplicate delays
-        firCoeffs[delay] += phasor
+    if delayPaths:
+        # Shift all delays to index zero for efficiency
+        delayOffset = min(delayPaths.keys())
+        maxDelay = max(delayPaths.keys())
 
-    if removeLosDelay:
-        firCoeffs = firCoeffs[losDelaySamples:]
+        # Construct fir filter
+        firCoeffs = np.zeros(maxDelay - delayOffset + 1, dtype=np.complex128)
+        for delay, phasor in delayPaths.items():
+            firCoeffs[delay - delayOffset] = phasor
 
-    # Add rayleigh
-    rayleighSig = generateRayleighFading(txSig, len(firCoeffs))
-    # TODO: This might require more normalization, maybe instead of fading power, split it across the taps?
-    # firCoeffs += rayleighSig
+        # Add rayleigh
+        # TODO: This might require more normalization, maybe instead of fading power, split it across the taps?
+        # rayleighSig = generateRayleighFading(txSig, len(firCoeffs))
+        # firCoeffs += rayleighSig
 
-    # Pass signal through filter
-    rxWave = np.convolve(firCoeffs, txWave)
-    return ReceiveSignal(wave=rxWave, time=np.arange(0, len(rxWave)) / fs), rayleighSig
+        # Pass signal through filter
+        rxWave = np.convolve(firCoeffs, txWave)
+        return ReceiveSignal(wave=rxWave, time=np.arange(0, len(rxWave)) / fs)
+    else:
+        return None  # No signal
 
 
 def computeDB(sig: npt.NDArray[Any]) -> npt.NDArray[np.float64]:
@@ -578,6 +650,7 @@ def computeSNR(txSig: npt.NDArray[np.float64], rxSig: npt.NDArray[np.complex128]
 def computeRmsDBM(rxSig: npt.NDArray[np.complex128]) -> float:
     """Compute the VRms and return it in dBm."""
 
+    # TODO: Do I need to move parts without signal?
     vRms = np.sqrt(np.mean(np.square(np.abs(rxSig))))
     return 30 + 20 * np.log10(vRms)  # 1ohm impedance
 
@@ -592,7 +665,7 @@ def main() -> None:
 
     # load moon DEM
     moonGrid = pygmt.datasets.load_moon_relief(
-        resolution="01m", region=[-180, 180, -90, -85], registration="gridline"
+        resolution="01m", region=[-180, 180, -90, -89], registration="gridline"
     )
 
     txHeight, rxHeight = cast(
@@ -607,16 +680,23 @@ def main() -> None:
     txLoc = geoTo3D(TX_COORD, txHeight + TX_HEIGHT)
     rxLoc = geoTo3D(RX_COORD, rxHeight + RX_HEIGHT)
 
-    refPoints, refCoords = generateReflectors(moonGrid, RX_COORD)
+    refPoints, refCoords = generateReflectors(moonGrid, TX_COORD, RX_COORD)
+    if len(refPoints) == 0:
+        print("No line of sight reflections")
+    else:
+        pprint(refCoords)
 
-    twoRaySig = twoRay(txLoc, rxLoc, txSig, refPoints)
-    rxSig, rayleighSig = model(txLoc, rxLoc, txSig, refPoints, removeLosDelay=True)
+    rxSig = model(txLoc, rxLoc, txSig, refPoints, True)
 
-    snr = computeSNR(txSig.wave, rxSig.wave)
+    # snr = computeSNR(txSig.wave, rxSig.wave)
 
     # generate map
     fig = pygmt.Figure()
-    fig.grdimage(grid=moonGrid, projection="G00/-90/12c", frame="afg")  # type: ignore
+    fig.grdimage(  # type: ignore
+        grid=moonGrid,
+        projection="G00/-90/12c",
+        frame="afg",
+    )
 
     refCoordsArr = np.array(refCoords)
     fig.plot(  # type: ignore
@@ -642,16 +722,26 @@ def main() -> None:
     )
     fig.show()  # type: ignore
 
+    if not rxSig:
+        print("No signal from model")
+        return
+
     nGraphs = 3
+    if not refPoints:
+        nGraphs -= 1
+
     fig, axs = plt.subplots(nGraphs, figsize=(20, 16))  # type: ignore
     axsGen = (a for a in axs)
 
-    ax = next(axsGen)
-    ax.plot(computeDBM(twoRaySig))
-    if SHOW_RX_SENSITIVITY:
-        ax.axhline(RX_SENSITIVITY, color="red")
-    ax.set_title("Two Ray")
-    ax.set_ylabel("Power [dBm]")
+    if refPoints:
+        twoRaySig = twoRay(txLoc, rxLoc, txSig, refPoints)
+        ax = next(axsGen)
+
+        ax.plot(computeDBM(twoRaySig))
+        if SHOW_RX_SENSITIVITY:
+            ax.axhline(RX_SENSITIVITY, color="red")
+        ax.set_title("Two Ray")
+        ax.set_ylabel("Power [dBm]")
 
     ax = next(axsGen)
     ax.plot(rxSig.time, computeDBM(rxSig.wave))
@@ -762,9 +852,15 @@ def scanRegion() -> None:
         if not np.isnan(results.loc[rxCoord.lat, rxCoord.lon]):  # type: ignore
             continue
 
-        reflectorLocs = generateReflectors(moonGrid, rxCoord)[0]
-        rxSig = model(txLoc, rxLoc, txSig, reflectorLocs, True)[0]
-        rxStrength = computeRmsDBM(rxSig.wave)
+        reflectorLocs = generateReflectors(moonGrid, TX_COORD, rxCoord)[0]
+        hasLOS = checkLOS(moonGrid, TX_COORD, TX_HEIGHT, rxCoord, RX_HEIGHT)
+
+        rxSig = model(txLoc, rxLoc, txSig, reflectorLocs, hasLOS)
+
+        if rxSig:
+            rxStrength = computeRmsDBM(rxSig.wave)
+        else:
+            rxStrength = LOG_ZERO_STUB
 
         results.loc[rxCoord.lat, rxCoord.lon] = rxStrength  # type: ignore
         print(f"Processed {rxCoord}")
@@ -789,6 +885,7 @@ def scanRegionMultiWorkerInit(_resultsMem: Any, _cancelEvent: mps.Event) -> None
 
 def scanRegionMultiWorker(
     txLoc: Point3D,
+    txCoord: PointGeo,
     tasks: list[tuple[Point3D, PointGeo]],
     updateQueue: mpq.Queue[int],
 ) -> None:
@@ -834,11 +931,16 @@ def scanRegionMultiWorker(
     tasksProcessed = 0
 
     for rxLoc, rxCoord in tasks:
-        reflectorLocs = generateReflectors(moonGrid, rxCoord)[0]
-        rxSig = model(txLoc, rxLoc, txSig, reflectorLocs, True)[0]
-        rxStrength = computeRmsDBM(rxSig.wave)
+        if np.isnan(results.loc[rxCoord.lat, rxCoord.lon]):  # type: ignore
+            reflectorLocs = generateReflectors(moonGrid, txCoord, rxCoord)[0]
+            hasLOS = checkLOS(moonGrid, TX_COORD, TX_HEIGHT, rxCoord, RX_HEIGHT)
 
-        results.loc[rxCoord.lat, rxCoord.lon] = rxStrength  # type: ignore
+            rxSig = model(txLoc, rxLoc, txSig, reflectorLocs, hasLOS)
+            if rxSig:
+                rxStrength = computeRmsDBM(rxSig.wave)
+                results.loc[rxCoord.lat, rxCoord.lon] = rxStrength  # type: ignore
+            else:
+                results.loc[rxCoord.lat, rxCoord.lon] = LOG_ZERO_STUB  # type: ignore
 
         # check cancel and update
         if cancelEvent.is_set():
@@ -924,16 +1026,12 @@ def scanRegionMulti() -> None:
     )
 
     # Generate tasks
-    tasks: list[tuple[Point3D, PointGeo]] = []
-    for rxLoc, rxCoord in zip(receiverLocs, transceivers[1:]):
-        if np.isnan(results.loc[rxCoord.lat, rxCoord.lon]):  # type: ignore
-            tasks.append((rxLoc, rxCoord))
+    tasks: list[tuple[Point3D, PointGeo]] = list(zip(receiverLocs, transceivers[1:]))
 
-    nWorkers = mp.cpu_count()
     cancelEvent = mp.Event()
 
     with mp.Pool(
-        nWorkers, scanRegionMultiWorkerInit, initargs=(resultsMem, cancelEvent)
+        N_WORKERS, scanRegionMultiWorkerInit, initargs=(resultsMem, cancelEvent)
     ) as pool:
         tasksComplete = 0
         mpManager = mp.Manager()
@@ -943,16 +1041,17 @@ def scanRegionMulti() -> None:
         procArgs: list[
             tuple[
                 Point3D,
+                PointGeo,
                 list[tuple[Point3D, PointGeo]],
                 mpq.Queue[int],
             ]
         ] = []
-        chunkSize, remainder = divmod(len(tasks), nWorkers)
+        chunkSize, remainder = divmod(len(tasks), N_WORKERS)
         if remainder != 0:
             chunkSize += 1
 
         for i in range(0, len(tasks), chunkSize):
-            procArgs.append((txLoc, tasks[i : i + chunkSize], updateQueue))
+            procArgs.append((txLoc, TX_COORD, tasks[i : i + chunkSize], updateQueue))
 
         # create processes
         processes = pool.starmap_async(scanRegionMultiWorker, procArgs)
@@ -969,7 +1068,7 @@ def scanRegionMulti() -> None:
                     taskInc = updateQueue.get_nowait()
                     tasksComplete += taskInc
                     print(
-                        f"Completed {tasksComplete} of {len(tasks)} tasks, or {tasksComplete/len(tasks)*100:0.2f}%"
+                        f"Completed {tasksComplete} of {len(tasks)} tasks, or {tasksComplete / len(tasks) * 100:0.2f}%"
                     )
                 except queue.Empty:
                     pass
@@ -987,7 +1086,7 @@ def scanRegionMulti() -> None:
                     taskInc = updateQueue.get_nowait()
                     tasksComplete += taskInc
                     print(
-                        f"Completed {tasksComplete} of {len(tasks)} tasks, or {tasksComplete/len(tasks)*100:0.2f}%"
+                        f"Completed {tasksComplete} of {len(tasks)} tasks, or {tasksComplete / len(tasks) * 100:0.2f}%"
                     )
                 except queue.Empty:
                     pass
@@ -1027,9 +1126,14 @@ def showHeatmap() -> None:
     )
 
     # Create a colormap for the secondary data
+
     pygmt.makecpt(  # type: ignore
-        cmap="jet",  # Color palette (e.g., jet, viridis, etc.)
-        series=[-109, -65, 0.01],  # Data range [min, max, increment]
+        cmap="jet",  # Color palette
+        series=[
+            results.min().item(),
+            results.max().item(),
+            0.01,
+        ],  # Data range [min, max, increment]
         continuous=True,  # Use continuous colormap
     )
 
@@ -1040,6 +1144,7 @@ def showHeatmap() -> None:
         transparency=25,  # Optional transparency level (0-100)
         projection=projection,
     )
+    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"])  # type: ignore
 
     # Add map frame and labels
     fig.basemap(  # type: ignore
@@ -1050,11 +1155,10 @@ def showHeatmap() -> None:
             VIEW_REGION[1].lat,
         ],
         projection=projection,
-        frame=["a", "+tExample Projection with Bathymetry and Colormap"],
+        frame=["afg"],
     )
 
     fig.show()  # type: ignore
-    pass
 
 
 if __name__ == "__main__":
