@@ -6,7 +6,6 @@ import queue
 import random
 import signal
 from dataclasses import dataclass
-from pprint import pprint
 from types import FrameType, TracebackType
 from typing import Any, cast
 
@@ -120,7 +119,7 @@ VIEW_REGION = (PointGeo(lon=-180, lat=-90), PointGeo(lon=180, lat=-88.5))
 
 # Reflector params
 REFLECTOR_COUNT = 5  # max number of reflectors to generate
-REFLECTOR_ATTEMPT_PER_RING = 2
+REFLECTOR_ATTEMPT_PER_RING = 5
 RING_RADIUS_MIN = 5
 RING_RADIUS_MAX = 500
 RING_COUNT = 10  # Number of rings to try between min and max ring radius
@@ -132,7 +131,10 @@ FADING_N_PATHS = 1024  # Should be a multiple of 4
 FADING_POWER = -80  # gain of the rayleigh fading channel in dBm
 
 # Ground reflection params
-COMPLEX_RELATIVE_PERMITTIVITY = 2.75 + 0.13j  # from NU-LHT-2M study
+COMPLEX_RELATIVITY_REAL = 2.75
+COMPLEX_RELATIVITY_REAL_STD = 0.115
+COMPLEX_RELATIVITY_IMAG = 0.13
+COMPLEX_RELATIVITY_IMAG_STD = 0.047
 
 # 5G data from Matlab params
 GEN_DATA_FILE = pathlib.Path(R"model/data/data.mat")
@@ -440,8 +442,11 @@ def generateRayleighFading(
         sig += 1j * np.sin(psi) * np.cos(wd * t * np.cos(angle) + phi)
 
     # Normalize
-    gain = np.power(10, FADING_POWER / 20) * np.sqrt(1e-3) / np.sqrt(m)
-    sig *= 2 * gain / np.sqrt(m)
+    # gain = np.power(10, FADING_POWER / 20) * np.sqrt(1e-3) / np.sqrt(m)
+    # sig *= 2 * gain / np.sqrt(m)
+    sig *= 2 / np.sqrt(m)
+    avgPower = np.mean(np.square(sig))
+    sig *= np.sqrt(1 / avgPower)
 
     return sig
 
@@ -477,8 +482,13 @@ def twoRay(
     ) / 2
 
     # Compute reflection coefficient, assume horizontal polarization
+    complexRelPermittivity = random.normalvariate(
+        COMPLEX_RELATIVITY_REAL, COMPLEX_RELATIVITY_REAL_STD
+    ) + (
+        1j * random.normalvariate(COMPLEX_RELATIVITY_IMAG, COMPLEX_RELATIVITY_IMAG_STD)
+    )
     reflectPolarization = np.sqrt(
-        COMPLEX_RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngle))
+        complexRelPermittivity - np.square(np.cos(reflectAngle))
     )
     reflectCoeff = (np.sin(reflectAngle) - reflectPolarization) / (
         np.sin(reflectAngle) + reflectPolarization
@@ -547,8 +557,14 @@ def model(
         ) / 2
 
         # Compute reflection coefficient
+        complexRelPermittivity = random.normalvariate(
+            COMPLEX_RELATIVITY_REAL, COMPLEX_RELATIVITY_REAL_STD
+        ) + (
+            1j
+            * random.normalvariate(COMPLEX_RELATIVITY_IMAG, COMPLEX_RELATIVITY_IMAG_STD)
+        )
         reflectPolarizations = np.sqrt(
-            COMPLEX_RELATIVE_PERMITTIVITY - np.square(np.cos(reflectAngles))
+            complexRelPermittivity - np.square(np.cos(reflectAngles))
         )
         reflectCoeffs = (np.sin(reflectAngles) - reflectPolarizations) / (
             np.sin(reflectAngles) + reflectPolarizations
@@ -558,7 +574,8 @@ def model(
         reflectPhasors = (
             reflectPls
             * reflectCoeffs
-            * np.exp(-1j * 2 * np.pi * carrFs * reflectDelays)
+            # * np.exp(-1j * 2 * np.pi * carrFs * reflectDelays)
+            * np.exp(1j * random.uniform(0, 2 * np.pi))
         )
 
         # compute delay indices
@@ -582,12 +599,18 @@ def model(
 
         # Add rayleigh
         # TODO: This might require more normalization, maybe instead of fading power, split it across the taps?
-        # rayleighSig = generateRayleighFading(txSig, len(firCoeffs))
-        # firCoeffs += rayleighSig
+        rayleighSig = (
+            generateRayleighFading(txSig, len(firCoeffs)) * losPl / len(firCoeffs)
+        )
+        firCoeffs += rayleighSig
 
         # Pass signal through filter
         rxWave = np.convolve(firCoeffs, txWave)
-        return ReceiveSignal(wave=rxWave, time=np.arange(0, len(rxWave)) / fs)
+        return (
+            ReceiveSignal(wave=rxWave, time=np.arange(0, len(rxWave)) / fs),
+            firCoeffs,
+            rayleighSig,
+        )
     else:
         return None  # No signal
 
@@ -683,12 +706,8 @@ def main() -> None:
     refPoints, refCoords = generateReflectors(moonGrid, TX_COORD, RX_COORD)
     if len(refPoints) == 0:
         print("No line of sight reflections")
-    else:
-        pprint(refCoords)
 
-    rxSig = model(txLoc, rxLoc, txSig, refPoints, True)
-
-    # snr = computeSNR(txSig.wave, rxSig.wave)
+    rxSig, firCoe, rayleigh = model(txLoc, rxLoc, txSig, refPoints, True)
 
     # generate map
     fig = pygmt.Figure()
@@ -726,7 +745,7 @@ def main() -> None:
         print("No signal from model")
         return
 
-    nGraphs = 3
+    nGraphs = 4
     if not refPoints:
         nGraphs -= 1
 
@@ -749,6 +768,13 @@ def main() -> None:
         ax.axhline(RX_SENSITIVITY, color="red")
     ax.set_title("Rx Signal")
     ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Power [dBm]")
+
+    ax = next(axsGen)
+    ax.plot(computeDBM(firCoe), label="Prop")
+    ax.plot(computeDBM(rayleigh), label="Rayleigh")
+    ax.set_title("Propagation paths")
+    # ax.set_xlabel("Time (s)")
     ax.set_ylabel("Power [dBm]")
 
     # ax = next(axsGen)
@@ -1162,7 +1188,7 @@ def showHeatmap() -> None:
 
 
 if __name__ == "__main__":
-    # main()
+    main()
     # scanRegion()
-    scanRegionMulti()
-    showHeatmap()
+    # scanRegionMulti()
+    # showHeatmap()
