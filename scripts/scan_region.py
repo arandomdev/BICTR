@@ -1,4 +1,6 @@
 import argparse
+import base64
+import json
 import multiprocessing as mp
 import multiprocessing.synchronize as mps
 import pathlib
@@ -14,55 +16,13 @@ import xarray as xr
 import lwchm.signal
 from lwchm import model, spatial
 
-MOON_RADIUS = 1737.4e3
 
-LOG_ZERO_STUB = -150  # Value to show when taking log of 0
+class Configuration(object):
+    resultsPath: pathlib.Path
+    workers: int  # Number of cores to use
 
-
-BPSK_TRANSMIT_POWER = 20  # Transmit power in dBm
-BPSK_DATA = b"deadbeef"
-BPSK_DATA_LEN = 32
-BPSK_FS = 7e9
-BPSK_CARR_FS = 500e6
-BPSK_SYMBOL_PERIOD = 1 / BPSK_FS * 20
-
-# Reflector params
-REFLECTOR_COUNT = 5  # max number of reflectors to generate
-REFLECTOR_ATTEMPT_PER_RING = 5
-RING_RADIUS_MIN = 5
-RING_RADIUS_MAX = 500
-RING_COUNT = 10  # Number of rings to try between min and max ring radius
-RING_RADIUS_UNCERTAINTY = 15  # +- random offset to radius
-
-# Rayleigh Params
-FADING_MAX_DOPPLER_SPEED = 1  # m/s
-FADING_N_PATHS = 1024  # Should be a multiple of 4
-
-# Ground reflection params
-COMPLEX_RELATIVITY_REAL = 2.75
-COMPLEX_RELATIVITY_REAL_STD = 0.115
-COMPLEX_RELATIVITY_IMAG = 0.13
-COMPLEX_RELATIVITY_IMAG_STD = 0.047
-
-
-class RawArguments(argparse.Namespace):
     body: Literal["moon", "earth"]
-
-    view_region: tuple[float, float, float, float]
-    scan_region: tuple[float, float, float, float]
-    scan_block_size: float
-    tx: tuple[float, float]
-    tx_height: float
-    rx_height: float
-
-    results_path: pathlib.Path
-
-    workers: int
-
-
-class Arguments(object):
-    body: Literal["moon", "earth"]
-    bodyRadius: float
+    resolution: str
 
     viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
     scanRegion: tuple[spatial.PointGeo, spatial.PointGeo]
@@ -71,35 +31,60 @@ class Arguments(object):
     txHeight: float
     rxHeight: float
 
-    resultsPath: pathlib.Path
+    modelType: Literal["lwchm"]
+    lwchmConf: model.LWCHMConfiguration | None
 
-    workers: int  # Number of cores to use
+    signalType: Literal["bpsk", "qpsk"]
+    pskConf: lwchm.signal.PSKConfiguration | None
 
-    def __init__(self, args: RawArguments) -> None:
-        self.body = args.body
-        if self.body == "moon":
-            self.bodyRadius = MOON_RADIUS
+    projection: str
+
+    def __init__(self, raw: dict[str, Any]) -> None:
+        self.resultsPath = pathlib.Path(raw["resultsPath"])
+        if raw["workers"] == -1:
+            self.workers = mp.cpu_count()
+        else:
+            self.workers = raw["workers"]
+
+        self.body = raw["body"]
+        self.resolution = raw["resolution"]
+
+        self.viewRegion = (
+            spatial.PointGeo(raw["viewRegion"][0][0], raw["viewRegion"][0][1]),
+            spatial.PointGeo(raw["viewRegion"][1][0], raw["viewRegion"][1][1]),
+        )
+        self.scanRegion = (
+            spatial.PointGeo(raw["scanRegion"][0][0], raw["scanRegion"][0][1]),
+            spatial.PointGeo(raw["scanRegion"][1][0], raw["scanRegion"][1][1]),
+        )
+
+        if raw["scanBlockSize"] == -1:
+            if self.resolution in spatial.RESOLUTION_MAP:
+                self.scanBlockSize = spatial.RESOLUTION_MAP[self.resolution]
+            else:
+                raise IndexError("Unknown resolution to compute max scan block size")
+        else:
+            self.scanBlockSize = raw["scanBlockSize"]
+
+        self.tx = spatial.PointGeo(raw["tx"][0], raw["tx"][1])
+        self.txHeight = raw["txHeight"]
+        self.rxHeight = raw["rxHeight"]
+
+        self.modelType = raw["model"]
+        if self.modelType == "lwchm":
+            self.lwchmConf = model.LWCHMConfiguration(**raw["lwchm"])
         else:
             raise NotImplementedError
 
-        self.viewRegion = (
-            spatial.PointGeo(args.view_region[0], args.view_region[1]),
-            spatial.PointGeo(args.view_region[2], args.view_region[3]),
-        )
-        self.scanRegion = (
-            spatial.PointGeo(args.scan_region[0], args.scan_region[1]),
-            spatial.PointGeo(args.scan_region[2], args.scan_region[3]),
-        )
-        self.scanBlockSize = args.scan_block_size
-        self.tx = spatial.PointGeo(args.tx[0], args.tx[1])
-        self.txHeight = args.tx_height
-        self.rxHeight = args.rx_height
-        self.resultsPath = args.results_path
+        self.signalType = raw["signal"]
+        if self.signalType == "bpsk" or self.signalType == "qpsk":
+            # Convert base64 to bytes
+            data = base64.decodebytes(raw["psk"]["data"].encode())
+            rawPskConf = raw["psk"]
+            rawPskConf["data"] = data
+            self.pskConf = lwchm.signal.PSKConfiguration(**rawPskConf)
 
-        if args.workers == -1:
-            self.workers = mp.cpu_count()
-        else:
-            self.workers = args.workers
+        self.projection = raw["projection"]
 
 
 class DelayedKeyboardInterrupt:
@@ -122,69 +107,26 @@ class DelayedKeyboardInterrupt:
             self.oldHandler(*self.signalReceived)  # type: ignore
 
 
-def getArgs() -> Arguments:
+def getArgs() -> Configuration:
     parser = argparse.ArgumentParser(
         prog="ScanRegion", description="Scan a region and generate a heatmap."
     )
-    parser.add_argument(
-        "body", choices=("moon", "earth"), help="Celestial body to use."
-    )
-    parser.add_argument(
-        "view-region",
-        metavar=("lon1", "lat1", "lon2", "lat2"),
-        type=float,
-        nargs=4,
-        help="View region to use. The scan region must be within the view region.",
-    )
-    parser.add_argument(
-        "scan-region",
-        metavar=("lon1", "lat1", "lon2", "lat2"),
-        type=float,
-        nargs=4,
-        help="View region to use. The scan region must be within the view region.",
-    )
-    parser.add_argument(
-        "scan_block_size",
-        type=float,
-        help="Coordinate increment amount in both XY.",
-    )
-    parser.add_argument(
-        "tx",
-        metavar=("lon", "lat"),
-        type=float,
-        nargs=2,
-        help="Transmitter coordinate.",
-    )
-    parser.add_argument(
-        "tx-height", type=float, help="Height of the transmitter above the ground."
-    )
-    parser.add_argument(
-        "rx-height", type=float, help="Height of the receiver above the ground."
-    )
-    parser.add_argument(
-        "results-path",
-        type=pathlib.Path,
-        help="File path for results. Should have a .nc extension.",
-    )
-    parser.add_argument(
-        "--workers", type=int, default=-1, help="Number of cores to use."
-    )
-
-    rawArgs = parser.parse_args(namespace=RawArguments())
-    return Arguments(rawArgs)
+    parser.add_argument("config_file", type=pathlib.Path)
+    configPath = cast(pathlib.Path, parser.parse_args().config_file)
+    return Configuration(json.loads(configPath.read_text()))
 
 
 def scanRegionMultiWorkerInit(
-    _progArgs: Arguments,
+    _progConfig: Configuration,
     _resultsMem: Any,
     _cancelEvent: mps.Event,
     _updateQueue: "mp.Queue[int]",
 ) -> None:
-    global progArgs
+    global progConfig
     global resultsMem
     global cancelEvent
     global updateQueue
-    progArgs = _progArgs
+    progConfig = _progConfig
     resultsMem = _resultsMem
     cancelEvent = _cancelEvent
     updateQueue = _updateQueue
@@ -206,39 +148,27 @@ def scanRegionMultiWorker(
             since the last update from this process
     """
 
-    grid = pygmt.datasets.load_moon_relief(
-        resolution="01m",
-        region=[  # type: ignore
-            progArgs.viewRegion[0].lon,
-            progArgs.viewRegion[1].lon,
-            progArgs.viewRegion[0].lat,
-            progArgs.viewRegion[1].lat,
-        ],
-        registration="gridline",
+    body = spatial.Body(
+        progConfig.body,
+        progConfig.resolution,
+        progConfig.viewRegion[0],
+        progConfig.viewRegion[1],
     )
-    body = spatial.Body(progArgs.bodyRadius, grid)
-    config = model.Configuration(
-        refCount=REFLECTOR_COUNT,
-        refAttemptPerRing=REFLECTOR_ATTEMPT_PER_RING,
-        ringRadiusMin=RING_RADIUS_MIN,
-        ringRadiusMax=RING_RADIUS_MAX,
-        ringRadiusUncertainty=RING_RADIUS_UNCERTAINTY,
-        ringCount=RING_COUNT,
-        complexRelPermittivityReal=COMPLEX_RELATIVITY_REAL,
-        complexRelPermittivityRealStd=COMPLEX_RELATIVITY_REAL_STD,
-        complexRelPermittivityImag=COMPLEX_RELATIVITY_IMAG,
-        complexRelPermittivityImagStd=COMPLEX_RELATIVITY_IMAG_STD,
-        fadingPaths=FADING_N_PATHS,
-        fadingDopplerSpread=FADING_MAX_DOPPLER_SPEED,
-    )
-    chModel = model.LWCHM(body, config)
+
+    assert progConfig.modelType == "lwchm"
+    assert progConfig.lwchmConf is not None
+    chModel = model.LWCHM(body, progConfig.lwchmConf)
 
     # Construct dataarray from shared memory
     lonAxis = np.arange(
-        progArgs.scanRegion[0].lon, progArgs.scanRegion[1].lon, progArgs.scanBlockSize
+        progConfig.scanRegion[0].lon,
+        progConfig.scanRegion[1].lon,
+        progConfig.scanBlockSize,
     )
     latAxis = np.arange(
-        progArgs.scanRegion[0].lat, progArgs.scanRegion[1].lat, progArgs.scanBlockSize
+        progConfig.scanRegion[0].lat,
+        progConfig.scanRegion[1].lat,
+        progConfig.scanBlockSize,
     )
 
     resultsArr = np.frombuffer(resultsMem, dtype=np.float64)
@@ -253,22 +183,25 @@ def scanRegionMultiWorker(
         },
     )
 
-    txSig = lwchm.signal.generateBPSKSignal(
-        BPSK_DATA, BPSK_SYMBOL_PERIOD, BPSK_FS, BPSK_CARR_FS, BPSK_TRANSMIT_POWER
-    )
+    assert progConfig.signalType == "bpsk" or progConfig.signalType == "qpsk"
+    assert progConfig.pskConf is not None
+    if progConfig.signalType == "bpsk":
+        txSig = lwchm.signal.generateBPSKSignal(progConfig.pskConf)
+    else:
+        txSig = lwchm.signal.generateQPSKSignal(progConfig.pskConf)
 
     tasksProcessed = 0
 
     for rxCoord in tasks:
         if np.isnan(results.loc[rxCoord.lat, rxCoord.lon]):  # type: ignore
             rxSig = chModel.compute(
-                txCoord, rxCoord, progArgs.txHeight, progArgs.rxHeight, txSig
+                txCoord, rxCoord, progConfig.txHeight, progConfig.rxHeight, txSig
             )
             if rxSig:
                 rxStrength = lwchm.signal.computeRmsDBM(rxSig.wave)
                 results.loc[rxCoord.lat, rxCoord.lon] = rxStrength  # type: ignore
             else:
-                results.loc[rxCoord.lat, rxCoord.lon] = LOG_ZERO_STUB  # type: ignore
+                results.loc[rxCoord.lat, rxCoord.lon] = -np.inf  # type: ignore
 
         # check cancel and update
         if cancelEvent.is_set():
@@ -283,26 +216,89 @@ def scanRegionMultiWorker(
     updateQueue.put(tasksProcessed)
 
 
+def showHeatmap(
+    progConfig: Configuration, body: spatial.Body, results: xr.DataArray
+) -> None:
+    fig = pygmt.Figure()
+
+    maskedResults = results.where(np.isfinite(results), np.nan)
+
+    fig.grdcontour(  # type: ignore
+        grid=body.grid,
+        # annotation="1000+f8p",  # Annotate contours every 1000 meters
+        pen="0.75p,blue",  # Contour line style
+        projection=progConfig.projection,
+    )
+
+    # Create a colormap for the secondary data
+
+    pygmt.makecpt(  # type: ignore
+        cmap="jet",  # Color palette
+        series=[
+            maskedResults.min().item(),
+            maskedResults.max().item(),
+            0.01,
+        ],  # Data range [min, max, increment]
+        continuous=True,  # Use continuous colormap
+    )
+
+    # Overlay the secondary data as a color map
+    fig.grdimage(  # type: ignore
+        grid=maskedResults,
+        cmap=True,  # Use the previously created colormap
+        transparency=25,  # Optional transparency level (0-100)
+        projection=progConfig.projection,
+    )
+    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"])  # type: ignore
+
+    # Add map frame and labels
+    fig.basemap(  # type: ignore
+        region=[
+            progConfig.viewRegion[0].lon,
+            progConfig.viewRegion[1].lon,
+            progConfig.viewRegion[0].lat,
+            progConfig.viewRegion[1].lat,
+        ],
+        projection=progConfig.projection,
+        frame=["afg"],
+        map_scale="jBR+w500e",
+    )
+
+    fig.show()  # type: ignore
+
+
 def main() -> None:
-    args = getArgs()
+    progConfig = getArgs()
+
+    # Create body now incase the relief needs to be downloaded
+    body = spatial.Body(
+        progConfig.body,
+        progConfig.resolution,
+        progConfig.viewRegion[0],
+        progConfig.viewRegion[1],
+    )
 
     print("Initializing")
     # generate list of transceiver locations
-    transceivers: list[spatial.PointGeo] = [args.tx]
+    transceivers: list[spatial.PointGeo] = [progConfig.tx]
     lonAxis = np.arange(
-        args.scanRegion[0].lon, args.scanRegion[1].lon, args.scanBlockSize
+        progConfig.scanRegion[0].lon,
+        progConfig.scanRegion[1].lon,
+        progConfig.scanBlockSize,
     )
     latAxis = np.arange(
-        args.scanRegion[0].lat, args.scanRegion[1].lat, args.scanBlockSize
+        progConfig.scanRegion[0].lat,
+        progConfig.scanRegion[1].lat,
+        progConfig.scanBlockSize,
     )
     for lon in lonAxis:
         for lat in latAxis:
             point = spatial.PointGeo(lon=lon, lat=lat)
-            if point != args.tx:
+            if point != progConfig.tx:
                 transceivers.append(point)
 
     # Load results into shared memory
-    if not args.resultsPath.exists():
+    if not progConfig.resultsPath.exists():
         results = xr.DataArray(
             dims=["lat", "lon"],
             coords={
@@ -310,9 +306,9 @@ def main() -> None:
                 "lat": latAxis,
             },
         )
-        results.to_netcdf(args.resultsPath)  # type: ignore
+        results.to_netcdf(progConfig.resultsPath)  # type: ignore
     else:
-        with xr.open_dataarray(args.resultsPath) as da:  # type: ignore
+        with xr.open_dataarray(progConfig.resultsPath) as da:  # type: ignore
             results = da.load()  # type: ignore
 
     resultsMem = mp.RawArray("b", results.nbytes)
@@ -334,10 +330,12 @@ def main() -> None:
     tasks: list[spatial.PointGeo] = list(transceivers[1:])
 
     cancelEvent = mp.Event()
-    updateQueue = cast(mp.Queue[int], mp.Queue())
+    updateQueue = cast("mp.Queue[int]", mp.Queue())
 
     with mp.Pool(
-        args.workers, scanRegionMultiWorkerInit, initargs=(resultsMem, cancelEvent)
+        progConfig.workers,
+        scanRegionMultiWorkerInit,
+        initargs=(progConfig, resultsMem, cancelEvent, updateQueue),
     ) as pool:
         tasksComplete = 0
 
@@ -348,12 +346,12 @@ def main() -> None:
                 list[spatial.PointGeo],
             ]
         ] = []
-        chunkSize, remainder = divmod(len(tasks), args.workers)
+        chunkSize, remainder = divmod(len(tasks), progConfig.workers)
         if remainder != 0:
             chunkSize += 1
 
         for i in range(0, len(tasks), chunkSize):
-            procArgs.append((args.tx, tasks[i : i + chunkSize]))
+            procArgs.append((progConfig.tx, tasks[i : i + chunkSize]))
 
         # create processes
         processes = pool.starmap_async(scanRegionMultiWorker, procArgs)
@@ -395,10 +393,11 @@ def main() -> None:
 
         print("Workers stopped, saving results")
         with DelayedKeyboardInterrupt():
-            results.to_netcdf(args.resultsPath)  # type: ignore
+            results.to_netcdf(progConfig.resultsPath)  # type: ignore
 
         processes.get()  # Propagate any exceptions
 
+    showHeatmap(progConfig, body, results)
     print("Exiting")
 
 

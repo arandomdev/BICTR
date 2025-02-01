@@ -17,6 +17,15 @@ class ReceiveSignal(object):
     wave: npt.NDArray[np.complex128]  # raw wave samples
 
 
+@dataclass
+class PSKConfiguration(object):
+    data: bytes
+    symbolPeriod: float
+    fs: float
+    carrFs: float
+    transmitPower: float
+
+
 def delaySamples(fs: float, delay: float | np.floating[Any]) -> int:
     """Compute the number of delay samples given the sampling freq and delay time.
 
@@ -27,79 +36,67 @@ def delaySamples(fs: float, delay: float | np.floating[Any]) -> int:
     return int(np.round(delay * fs))
 
 
-def generateBPSKSignal(
-    data: bytes, symbolPeriod: float, fs: float, carrFs: float, transmitPower: float
-) -> TransmitSignal:
+def generateBPSKSignal(config: PSKConfiguration) -> TransmitSignal:
     """Generate a BPSK signal, mainly used for visualization.
 
     Args:
-        data: The data to encode
-        symbolPeriod: Symbol period in seconds
-        fs: Sampling frequency
-        carrFs: Carrier frequency
-        transmitPower: Power in dBm
+        config: Signal configuration
     Returns:
         The generated transmitSignal
     """
 
     # Compute amplitude
-    amp = np.power(10, transmitPower / 20) * np.sqrt(1e-3)
+    amp = np.power(10, config.transmitPower / 20) * np.sqrt(1e-3)
 
     # convert to phase array
-    phases = np.zeros(len(data) * 8)
-    for i, byte in enumerate(data):
+    phases = np.zeros(len(config.data) * 8)
+    for i, byte in enumerate(config.data):
         for j in range(8):
             phases[i * 8 + j] = np.pi if (byte >> j) & 0x1 else 0
 
     # upsample to sampling freq
-    samplesPerBit = int(symbolPeriod / (1 / fs))
+    samplesPerBit = int(config.symbolPeriod / (1 / config.fs))
     phasesUpsampled = np.repeat(phases, samplesPerBit)
 
     # Modulate
-    t = np.arange(0, len(phasesUpsampled)) / fs
-    signal = amp * np.cos((2 * np.pi * carrFs * t) + phasesUpsampled)
+    t = np.arange(0, len(phasesUpsampled)) / config.fs
+    signal = amp * np.cos((2 * np.pi * config.carrFs * t) + phasesUpsampled)
     return TransmitSignal(
         wave=signal,
-        fs=fs,
-        carrierFs=carrFs,
+        fs=config.fs,
+        carrierFs=config.carrFs,
     )
 
 
-def generateQPSKSignal(
-    data: bytes, symbolPeriod: float, fs: int, carrFs: int, transmitPower: float
-) -> TransmitSignal:
+def generateQPSKSignal(config: PSKConfiguration) -> TransmitSignal:
     """Generate a QPSK signal.
 
     Args:
-        data: The data to encode
-        symbolPeriod: Symbol period in seconds
-        fs: Sampling frequency
-        carrFs: Carrier frequency
-        transmitPower: Power in dBm
+        config: Signal configuration
     Returns:
         The generated transmitSignal
     """
     # Compute amplitude
-    amp = np.power(10, transmitPower / 20) * np.sqrt(1e-3)
+    amp = np.power(10, config.transmitPower / 20) * np.sqrt(1e-3)
 
     # convert to frequency array
     phaseMap = (np.pi / 4, 3 * np.pi / 4, 7 * np.pi / 4, 5 * np.pi / 4)
-    phases = np.zeros(len(data) * 4)
-    for i, byte in enumerate(data):
+    phases = np.zeros(len(config.data) * 4)
+    for i, byte in enumerate(config.data):
         for j in range(4):
             phases[i * 4 + j] = phaseMap[(byte >> (j * 2)) & 0x3]
 
     # upsample to sampling freq
-    samplesPerBit = int(symbolPeriod / (1 / fs))
+    samplesPerBit = int(config.symbolPeriod / (1 / config.fs))
     phasesUpsampled = np.repeat(phases, samplesPerBit)
 
     # Modulate
-    t = np.arange(0, len(phasesUpsampled)) / fs
-    signal = amp * np.cos((2 * np.pi * carrFs * t) + phasesUpsampled)
+    t = np.arange(0, len(phasesUpsampled)) / config.fs
+    signal = amp * np.cos((2 * np.pi * config.carrFs * t) + phasesUpsampled)
     return TransmitSignal(
         wave=signal,
-        fs=fs,
-        carrierFs=carrFs,
+        fs=config.fs,
+        carrierFs=config.carrFs,
     )
 
 

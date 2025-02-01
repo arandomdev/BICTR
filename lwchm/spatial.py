@@ -1,9 +1,13 @@
-from typing import cast
+from typing import Literal, cast
 
 import numpy as np
 import numpy.typing as npt
 import pygmt  # type: ignore
-import xarray as xr
+
+MOON_RADIUS = 1737.4e3
+EARTH_RADIUS = 6378137
+
+RESOLUTION_MAP = {"01m": 1 / 60, "01s": 1 / 3600}
 
 
 class Point3D(object):
@@ -111,15 +115,48 @@ class PointGeo(object):
 class Body(object):
     """Represents a celestial body"""
 
-    def __init__(self, radius: float, grid: xr.DataArray) -> None:
+    def __init__(
+        self,
+        body: Literal["moon", "earth"],
+        resolution: str,
+        coord1: PointGeo,
+        coord2: PointGeo,
+    ) -> None:
         """Construct a Body.
 
         Args:
-            radius: The radius of the body.
-            grid: The gridline registered relief of the body
+            body: The celestial body to load
+            resolution: The gridline resolution to pass to pygmt's load relief
+            coord1: The first corner defining the grid to load
+            coord2: The second corner defining the grid to load
         """
-        self.radius = radius
-        self.grid = grid
+
+        region = [
+            coord1.lon,
+            coord2.lon,
+            coord1.lat,
+            coord2.lat,
+        ]
+
+        if body == "moon":
+            self.radius = MOON_RADIUS
+            self.grid = pygmt.datasets.load_moon_relief(
+                resolution=resolution,  # type: ignore
+                region=region,  # type: ignore
+                registration="gridline",
+            )
+        elif body == "earth":
+            self.radius = EARTH_RADIUS
+            self.grid = pygmt.datasets.load_earth_relief(
+                resolution=resolution,  # type: ignore
+                region=region,  # type: ignore
+                registration="gridline",
+            )
+
+        if resolution in RESOLUTION_MAP:
+            self._gridPixelSize = RESOLUTION_MAP[resolution]
+        else:
+            raise NotImplementedError("Unknown resolution")
 
     def destination(self, loc: PointGeo, bearing: float, distance: float) -> PointGeo:
         """Compute the destination location with bearing and distance.
@@ -163,6 +200,26 @@ class Body(object):
         z = height * np.cos(inc)
         return Point3D(x=x, y=y, z=z)
 
+    def getTrackHeights(
+        self, start: PointGeo, end: PointGeo
+    ) -> npt.NDArray[np.float64]:
+        """Sample the elevation along a great-circle track
+
+        Args:
+            start: Start point of the track
+            end: End point of the track
+
+        Returns:
+            The heights of the points
+        """
+
+        track = pygmt.project(  # type: ignore
+            center=(start.lon, start.lat),
+            endpoint=(end.lon, end.lat),
+            generate=self._gridPixelSize,
+        )
+        return self.getHeights(track)  # type: ignore
+
     def getHeights(self, points: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         """Get the heights of several points
 
@@ -198,13 +255,7 @@ class Body(object):
             endHeightBias: Relative height of the end point
         """
 
-        # Project from start to end and get terrain height
-        track = pygmt.project(  # type: ignore
-            center=(start.lon, start.lat),
-            endpoint=(end.lon, end.lat),
-            generate=0.1,
-        )
-        trackHeights = self.getHeights(track)  # type: ignore
+        trackHeights = self.getTrackHeights(start, end)
 
         # Check if the signal intersects with terrain
         los = cast(

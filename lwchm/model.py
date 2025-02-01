@@ -10,7 +10,7 @@ from lwchm import propagation, signal, spatial
 
 
 @dataclass
-class Configuration(object):
+class LWCHMConfiguration(object):
     """Model configuration and constants"""
 
     # Reflector generation
@@ -35,7 +35,7 @@ class Configuration(object):
 class LWCHM(object):
     """Lunar Wireless Channel Model"""
 
-    def __init__(self, body: spatial.Body, config: Configuration) -> None:
+    def __init__(self, body: spatial.Body, config: LWCHMConfiguration) -> None:
         """Construct a lwchm runner
 
         Args:
