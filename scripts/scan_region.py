@@ -26,7 +26,6 @@ class Configuration(object):
 
     viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
     scanRegion: tuple[spatial.PointGeo, spatial.PointGeo]
-    scanBlockSize: float  # Coordinate increment amount in XY
     tx: spatial.PointGeo
     txHeight: float
     rxHeight: float
@@ -57,14 +56,6 @@ class Configuration(object):
             spatial.PointGeo(raw["scanRegion"][0][0], raw["scanRegion"][0][1]),
             spatial.PointGeo(raw["scanRegion"][1][0], raw["scanRegion"][1][1]),
         )
-
-        if raw["scanBlockSize"] == -1:
-            if self.resolution in spatial.RESOLUTION_MAP:
-                self.scanBlockSize = spatial.RESOLUTION_MAP[self.resolution]
-            else:
-                raise IndexError("Unknown resolution to compute max scan block size")
-        else:
-            self.scanBlockSize = raw["scanBlockSize"]
 
         self.tx = spatial.PointGeo(raw["tx"][0], raw["tx"][1])
         self.txHeight = raw["txHeight"]
@@ -160,15 +151,11 @@ def scanRegionMultiWorker(
     chModel = model.LWCHM(body, progConfig.lwchmConf)
 
     # Construct dataarray from shared memory
-    lonAxis = np.arange(
-        progConfig.scanRegion[0].lon,
-        progConfig.scanRegion[1].lon,
-        progConfig.scanBlockSize,
+    lonAxis = body.grid.lon.sel(
+        lon=slice(progConfig.scanRegion[0].lon, progConfig.scanRegion[1].lon)
     )
-    latAxis = np.arange(
-        progConfig.scanRegion[0].lat,
-        progConfig.scanRegion[1].lat,
-        progConfig.scanBlockSize,
+    latAxis = body.grid.lat.sel(
+        lat=slice(progConfig.scanRegion[0].lat, progConfig.scanRegion[1].lat)
     )
 
     resultsArr = np.frombuffer(resultsMem, dtype=np.float64)
@@ -278,19 +265,17 @@ def main() -> None:
         progConfig.viewRegion[1],
     )
 
+    # Get axes
     print("Initializing")
+    lonAxis = body.grid.lon.sel(
+        lon=slice(progConfig.scanRegion[0].lon, progConfig.scanRegion[1].lon)
+    )
+    latAxis = body.grid.lat.sel(
+        lat=slice(progConfig.scanRegion[0].lat, progConfig.scanRegion[1].lat)
+    )
+
     # generate list of transceiver locations
     transceivers: list[spatial.PointGeo] = [progConfig.tx]
-    lonAxis = np.arange(
-        progConfig.scanRegion[0].lon,
-        progConfig.scanRegion[1].lon,
-        progConfig.scanBlockSize,
-    )
-    latAxis = np.arange(
-        progConfig.scanRegion[0].lat,
-        progConfig.scanRegion[1].lat,
-        progConfig.scanBlockSize,
-    )
     for lon in lonAxis:
         for lat in latAxis:
             point = spatial.PointGeo(lon=lon, lat=lat)

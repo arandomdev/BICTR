@@ -251,6 +251,8 @@ class LWCHM(object):
             )
             firCoeffs += rayleighSig
 
+            firCoeffs /= (len(delayPaths) + 1) ** 2
+
             # Pass signal through filter
             rxWave = np.convolve(firCoeffs, txWave)
             return signal.ReceiveSignal(wave=rxWave)

@@ -4,9 +4,7 @@ import numpy as np
 import numpy.typing as npt
 import pygmt  # type: ignore
 
-MOON_RADIUS = 1737.4e3
-EARTH_RADIUS = 6378137
-
+RADIUS_MAP = {"moon": 1737.4e3, "earth": 6378137.0}
 RESOLUTION_MAP = {"01m": 1 / 60, "01s": 1 / 3600}
 
 
@@ -138,15 +136,14 @@ class Body(object):
             coord2.lat,
         ]
 
+        self.radius = RADIUS_MAP[body]
         if body == "moon":
-            self.radius = MOON_RADIUS
             self.grid = pygmt.datasets.load_moon_relief(
                 resolution=resolution,  # type: ignore
                 region=region,  # type: ignore
                 registration="gridline",
             )
         elif body == "earth":
-            self.radius = EARTH_RADIUS
             self.grid = pygmt.datasets.load_earth_relief(
                 resolution=resolution,  # type: ignore
                 region=region,  # type: ignore
@@ -162,7 +159,7 @@ class Body(object):
         """Compute the destination location with bearing and distance.
 
         Args:
-            bearing: direction of travel in radians
+            bearing: direction of travel in radians, clockwise from north
             distance: distance of travel in meters
         """
         dist = distance / self.radius

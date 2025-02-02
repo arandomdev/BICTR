@@ -1,4 +1,5 @@
 import argparse
+import math
 import pathlib
 import xml.etree.ElementTree as ET
 import zipfile
@@ -17,8 +18,11 @@ class Arguments(argparse.Namespace):
 
 @dataclass
 class KMLData(object):
-    overlayBox: tuple[tuple[float, float], tuple[float, float]]  # SW to NE, lon,lat
     coveragePath: str
+    north: float
+    south: float
+    east: float
+    west: float
 
 
 DCFMapping = dict[tuple[int, int, int], float]
@@ -68,7 +72,9 @@ def readKML(kmlFile: IO[bytes]) -> KMLData:
     east = float(eastElem.text)
     west = float(westElem.text)
 
-    return KMLData(overlayBox=((west, south), (east, north)), coveragePath=coveragePath)
+    return KMLData(
+        coveragePath=coveragePath, north=north, south=south, east=east, west=west
+    )
 
 
 def readDCF(dcfFile: IO[bytes]) -> DCFMapping:
@@ -123,12 +129,23 @@ def main() -> None:
         with archive.open("dcf") as dcfFile:
             dcfMapping = readDCF(dcfFile)
 
+    # Check that the overlay box falls on integer coordinates
+    if not (
+        math.isclose(kmlData.north, round(kmlData.north), rel_tol=1e-5)
+        and math.isclose(kmlData.south, round(kmlData.south), rel_tol=1e-5)
+        and math.isclose(kmlData.east, round(kmlData.east), rel_tol=1e-5)
+        and math.isclose(kmlData.west, round(kmlData.west), rel_tol=1e-5)
+    ):
+        raise ValueError("Overlay box must lay on integer coordinates")
+    if not (((coverageWidth % 3600) == 0) and ((coverageHeight % 3600) == 0)):
+        raise ValueError("Coverage height and width must be a multiple of 3600")
+
     # generate array axes
     lonAxis = np.linspace(
-        kmlData.overlayBox[0][0], kmlData.overlayBox[1][0], coverageWidth
+        round(kmlData.west), round(kmlData.east), coverageWidth, endpoint=False
     )
     latAxis = np.linspace(
-        kmlData.overlayBox[0][1], kmlData.overlayBox[1][1], coverageHeight
+        round(kmlData.south), round(kmlData.north), coverageHeight, endpoint=False
     )
 
     # convert color codes to dbm values

@@ -1,5 +1,5 @@
 {
-    "resultsPath": "data/lwchm_earth_sp_crater.nc",
+    "resultsPath": "data/lwchm_earth_sp_crater_narrow.nc",
     "workers": -1,
     "body": "earth",
     "resolution": "01s",
@@ -15,12 +15,12 @@
     ],
     "scanRegion": [
         [
-            -111.654558,
-            35.568331
+            -111.633333,
+            35.583333
         ],
         [
-            -111.609642,
-            35.613247
+            -111.625,
+            35.608333
         ]
     ],
     "tx": [
@@ -36,11 +36,11 @@
         "ringRadiusMin": 5,
         "ringRadiusMax": 100,
         "ringRadiusUncertainty": 10,
-        "ringCount": 10,
-        "complexRelPermittivityReal": 2.75,
-        "complexRelPermittivityRealStd": 0.115,
-        "complexRelPermittivityImag": 0.13,
-        "complexRelPermittivityImagStd": 0.047,
+        "ringCount": 5,
+        "complexRelPermittivityReal": 2.5,
+        "complexRelPermittivityRealStd": 0.0058,
+        "complexRelPermittivityImag": 0.06,
+        "complexRelPermittivityImagStd": 0.0058,
         "fadingPaths": 1024,
         "fadingDopplerSpread": 1
     },
