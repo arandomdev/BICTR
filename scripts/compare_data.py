@@ -1,3 +1,5 @@
+import pathlib
+
 import numpy as np
 import pygmt  # type: ignore
 import xarray as xr
@@ -23,8 +25,9 @@ def createHeatmap(
     body: spatial.Body,
     da: xr.DataArray,
     title: str,
-    scaleMin: float | None,
-    scaleMax: float | None,
+    scaleMin: float | None = None,
+    scaleMax: float | None = None,
+    savePath: pathlib.Path | None = None,
 ) -> None:
     fig = pygmt.Figure()
 
@@ -71,22 +74,42 @@ def createHeatmap(
     )
 
     fig.show()  # type: ignore
-    pass
+
+    if savePath is not None:
+        fig.savefig(savePath)  # type: ignore
+
+
+def printStats(da: xr.DataArray) -> None:
+    masked = np.ma.masked_invalid(da)  # type: ignore
+    print(f"mean: {masked.mean()}")  # type: ignore
+    print(f"std: {masked.std()}")  # type: ignore
 
 
 def main() -> None:
     # Open files
-    with xr.open_dataarray("data/lwchm_earth_sp_crater_narrow.nc") as da:  # type: ignore
+    with xr.open_dataarray("data/drats/SiteK.nc") as da:  # type: ignore
+        siteK = da.load()  # type: ignore
+    with xr.open_dataarray("data/lwchm_earth_sp_crater.nc") as da:  # type: ignore
         lwchmResults = da.load()  # type: ignore
     with xr.open_dataarray("data/splat_earth_sp_crater.nc") as da:  # type: ignore
         splatResults = da.load()  # type: ignore
+    with xr.open_dataarray("data/itm_earth_sp_crater.nc") as da:  # type: ignore
+        itmResults = da.load()  # type: ignore
 
     # Narrow and reindex files
+    siteK = narrowData(siteK)
     lwchmResults = narrowData(lwchmResults)
     splatResults = narrowData(splatResults)
+    itmResults = narrowData(itmResults)
 
     body = spatial.Body("earth", "01s", VIEW_REGION[0], VIEW_REGION[1])
     grid = body.grid
+    siteK = siteK.reindex_like(
+        grid,
+        method="nearest",
+        tolerance=1e-6,
+        fill_value=-np.inf,  # type: ignore
+    )
     lwchmResults = lwchmResults.reindex_like(
         grid,
         method="nearest",
@@ -99,13 +122,71 @@ def main() -> None:
         tolerance=1e-6,
         fill_value=-np.inf,  # type: ignore
     )
+    itmResults = itmResults.reindex_like(
+        grid,
+        method="nearest",
+        tolerance=1e-6,
+        fill_value=-np.inf,  # type: ignore
+    )
 
-    splatDiff = lwchmResults - splatResults
+    lwchmDiff = lwchmResults - siteK
+    splatDiff = splatResults - siteK
+    itmDiff = itmResults - siteK
+
+    print("LWCHM Diff")
+    printStats(lwchmDiff)
+    print("Splat Diff")
+    printStats(splatDiff)
+    print("ITM Diff")
+    printStats(itmDiff)
+
+    # Get absolute min and max diff
+    maskedSplatDiff = splatDiff.where(np.isfinite(splatDiff), np.nan)
+    maskedItmDiff = itmDiff.where(np.isfinite(itmDiff), np.nan)
+    diffMin = maskedSplatDiff.min().item()
+    if (itmMin := maskedItmDiff.min().item()) < diffMin:
+        diffMin = itmMin
+    diffMax = maskedSplatDiff.max().item()
+    if (itmMin := maskedItmDiff.max().item()) > diffMax:
+        diffMax = itmMin
 
     # Create figures
-    createHeatmap(body, lwchmResults, "LWCHM", -150, 0)
-    createHeatmap(body, splatResults, "Splat", -150, 0)
-    createHeatmap(body, splatDiff, "Splat Delta from LWCHM", -30, 30)
+    createHeatmap(
+        body, siteK, "Site K", -150, 0, pathlib.Path(R"data/figures/SiteK.png")
+    )
+    createHeatmap(
+        body, lwchmResults, "LWCHM", -150, 0, pathlib.Path(R"data/figures/LWCHM.png")
+    )
+    createHeatmap(
+        body, splatResults, "Splat", -150, 0, pathlib.Path(R"data/figures/Splat.png")
+    )
+    createHeatmap(
+        body, itmResults, "ITM", -150, 0, pathlib.Path(R"data/figures/ITM.png")
+    )
+    createHeatmap(
+        body,
+        lwchmDiff,
+        "LWCHM Delta from Site K",
+        diffMin,
+        diffMax,
+        pathlib.Path(R"data/figures/LwchmDiff.png"),
+    )
+    createHeatmap(
+        body,
+        splatDiff,
+        "Splat Delta from Site K",
+        diffMin,
+        diffMax,
+        pathlib.Path(R"data/figures/SplatDiff.png"),
+    )
+    createHeatmap(
+        body,
+        itmDiff,
+        "ITM Delta from Site K",
+        diffMin,
+        diffMax,
+        pathlib.Path(R"data/figures/ItmDiff.png"),
+    )
     pass
 
 

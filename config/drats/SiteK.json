@@ -1,0 +1,55 @@
+{
+    "site": "data/drats/SiteK.ppm",
+    "siteTrack": "data/drats/SiteK_track.ppm",
+    "output": "data/drats/SiteK.nc",
+    "waypoints": [
+        [
+            [
+                894,
+                888
+            ],
+            [
+                -111.622274,
+                35.577799
+            ]
+        ],
+        [
+            [
+                291,
+                397
+            ],
+            [
+                -111.648211,
+                35.594869
+            ]
+        ]
+    ],
+    "siteBounds": [
+        [
+            80,
+            100
+        ],
+        [
+            1130,
+            943
+        ]
+    ],
+    "colorMapBounds": [
+        [
+            1162,
+            131
+        ],
+        [
+            1191,
+            933
+        ]
+    ],
+    "colorStrengthLimits": [
+        0,
+        -140
+    ],
+    "transmitter": [
+        641,
+        519
+    ]
+}

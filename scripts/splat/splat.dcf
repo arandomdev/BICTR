@@ -1,0 +1,46 @@
+; SPLAT! Auto-generated DBM Signal Level Color Definition (".dcf") File
+;
+; Format for the parameters held in this file is as follows:
+;
+;    dBm: red, green, blue
+;
+; ...where "dBm" is the received signal power level between +40 dBm
+; and -200 dBm, and "red", "green", and "blue" are the corresponding
+; RGB color definitions ranging from 0 to 255 for the region specified.
+;
+; The following parameters may be edited and/or expanded
+; for future runs of SPLAT!  A total of 32 contour regions
+; may be defined in this file.
+;
+;
+  +0: 255,   0,   0
+  -5: 255,  64,   0
+ -10: 255, 128,   0
+ -15: 255, 146,   0
+ -20: 255, 165,   0
+ -25: 255, 185,   0
+ -30: 255, 206,   0
+ -35: 255, 230,   0
+ -40: 255, 255,   0
+ -45: 219, 255,   0
+ -50: 184, 255,   0
+ -55:  92, 255,   0
+ -60:   0, 255,   0
+ -65:   0, 231,   0
+ -70:   0, 208,   0
+ -75:   0, 202,  98
+ -80:   0, 196, 196
+ -85:   0, 172, 225
+ -90:   0, 148, 255
+ -95:  40, 114, 255
+-100:  80,  80, 255
+-105:  40,  59, 255
+-110:   0,  38, 255
+-115:  71,  50, 255
+-120: 142,  63, 255
+-125: 169,  58, 255
+-130: 196,  54, 255
+-135: 225,  27, 255
+-140: 255,   0, 255
+-145: 255,  97, 229
+-150: 255, 194, 204

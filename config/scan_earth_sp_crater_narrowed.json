@@ -1,5 +1,5 @@
 {
-    "resultsPath": "data/lwchm_earth_sp_crater_narrow.nc",
+    "resultsPath": "data/lwchm_earth_sp_crater_narrowed.nc",
     "workers": -1,
     "body": "earth",
     "resolution": "01s",

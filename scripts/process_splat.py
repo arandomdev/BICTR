@@ -123,10 +123,10 @@ def main() -> None:
                 coverageData = np.array(img)
 
         # Read DCF
-        if "dcf" not in files:
+        if "splat.dcf" not in files:
             raise FileNotFoundError("Unable to find DCF file")
 
-        with archive.open("dcf") as dcfFile:
+        with archive.open("splat.dcf") as dcfFile:
             dcfMapping = readDCF(dcfFile)
 
     # Check that the overlay box falls on integer coordinates
