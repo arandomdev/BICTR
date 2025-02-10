@@ -3,3 +3,13 @@
 data/
 
 __pycache__
+
+*.sdf
+*site_report.txt
+dcf
+.lcf
+*.ppm
+*.kml
+*.png
+*.kmz
+*.zip
