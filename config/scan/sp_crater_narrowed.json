@@ -1,0 +1,56 @@
+{
+    "resultsPath": "data/lwchm/sp_crater_narrowed.nc",
+    "workers": -1,
+    "body": "earth",
+    "resolution": "01s",
+    "viewRegion": [
+        [
+            -111.655457,
+            35.567432
+        ],
+        [
+            -111.608743,
+            35.614146
+        ]
+    ],
+    "scanRegion": [
+        [
+            -111.633333,
+            35.583333
+        ],
+        [
+            -111.625,
+            35.608333
+        ]
+    ],
+    "tx": [
+        -111.632100,
+        35.590789
+    ],
+    "txHeight": 10,
+    "rxHeight": 2,
+    "model": "lwchm",
+    "lwchm": {
+        "refCount": 5,
+        "refAttemptPerRing": 3,
+        "ringRadiusMin": 5,
+        "ringRadiusMax": 100,
+        "ringRadiusUncertainty": 10,
+        "ringCount": 5,
+        "complexRelPermittivityReal": 2.5,
+        "complexRelPermittivityRealStd": 0.0058,
+        "complexRelPermittivityImag": 0.06,
+        "complexRelPermittivityImagStd": 0.0058,
+        "fadingPaths": 1024,
+        "fadingDopplerSpread": 1
+    },
+    "signal": "qpsk",
+    "psk": {
+        "data": "ZGVhZGJlZWY=",
+        "symbolPeriod": 6e-6,
+        "fs": 3e9,
+        "carrFs": 913e6,
+        "transmitPower": 30
+    },
+    "projection": "M15c"
+}

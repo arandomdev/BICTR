@@ -1,42 +1,41 @@
 {
-    "resultsPath": "data/moon_south_pole.nc",
+    "resultsPath": "data/lwchm/siteL.nc",
     "workers": -1,
-    "body": "moon",
-    "resolution": "01m",
+    "body": "earth",
+    "resolution": "01s",
     "viewRegion": [
         [
-            -180,
-            -90
+            -111.62537,
+            35.603542
         ],
         [
-            180,
-            -88.5
+            -111.578657,
+            35.650255
         ]
     ],
     "scanRegion": [
         [
-            -180,
-            -89.99
+            -111.624472,
+            35.60444
         ],
         [
-            180,
-            -89
+            -111.579555,
+            35.649357
         ]
     ],
-    "scanBlockSize": 0.1,
     "tx": [
-        -180,
-        -90
+        -111.602013,
+        35.626898
     ],
-    "txHeight": 2,
+    "txHeight": 10,
     "rxHeight": 2,
     "model": "lwchm",
     "lwchm": {
         "refCount": 5,
-        "refAttemptPerRing": 5,
+        "refAttemptPerRing": 3,
         "ringRadiusMin": 5,
-        "ringRadiusMax": 500,
-        "ringRadiusUncertainty": 15,
+        "ringRadiusMax": 100,
+        "ringRadiusUncertainty": 10,
         "ringCount": 10,
         "complexRelPermittivityReal": 2.75,
         "complexRelPermittivityRealStd": 0.115,
@@ -45,12 +44,13 @@
         "fadingPaths": 1024,
         "fadingDopplerSpread": 1
     },
-    "signal": "bpsk",
+    "signal": "qpsk",
     "psk": {
         "data": "ZGVhZGJlZWY=",
-        "symbolPeriod": 2.85714e-9,
-        "fs": 7e9,
-        "carrFs": 500e6,
-        "transmitPower": 20
-    }
+        "symbolPeriod": 6e-6,
+        "fs": 3e9,
+        "carrFs": 913e6,
+        "transmitPower": 30
+    },
+    "projection": "M15c"
 }

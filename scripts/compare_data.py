@@ -1,4 +1,8 @@
+import argparse
+import csv
+import json
 import pathlib
+from dataclasses import dataclass
 
 import numpy as np
 import pygmt  # type: ignore
@@ -6,15 +10,48 @@ import xarray as xr
 
 from lwchm import spatial
 
-VIEW_REGION = (
-    spatial.PointGeo(-111.655457, 35.567432),
-    spatial.PointGeo(-111.608743, 35.614146),
-)
+NO_SIGNAL_LEVEL = -150
 
 
-def narrowData(da: xr.DataArray) -> xr.DataArray:
-    lonMask = (da.lon >= VIEW_REGION[0].lon) & (da.lon <= VIEW_REGION[1].lon)
-    latMask = (da.lat >= VIEW_REGION[0].lat) & (da.lat <= VIEW_REGION[1].lat)
+@dataclass
+class ProgramConfig(object):
+    name: str
+    dratsData: pathlib.Path
+    lwchmData: pathlib.Path
+    splatData: pathlib.Path
+    itmData: pathlib.Path
+    outputPath: pathlib.Path
+
+    viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
+    projection: str
+
+
+def getConfig() -> ProgramConfig:
+    parser = argparse.ArgumentParser("compare_data.py")
+    parser.add_argument("config", type=pathlib.Path)
+    args = parser.parse_args()
+
+    with open(args.config) as configFile:
+        rawConf = json.load(configFile)
+
+    return ProgramConfig(
+        name=rawConf["name"],
+        dratsData=pathlib.Path(rawConf["dratsData"]),
+        lwchmData=pathlib.Path(rawConf["lwchmData"]),
+        splatData=pathlib.Path(rawConf["splatData"]),
+        itmData=pathlib.Path(rawConf["itmData"]),
+        outputPath=pathlib.Path(rawConf["outputPath"]),
+        viewRegion=(
+            spatial.PointGeo(rawConf["viewRegion"][0][0], rawConf["viewRegion"][0][1]),
+            spatial.PointGeo(rawConf["viewRegion"][1][0], rawConf["viewRegion"][1][1]),
+        ),
+        projection=rawConf["projection"],
+    )
+
+
+def narrowData(conf: ProgramConfig, da: xr.DataArray) -> xr.DataArray:
+    lonMask = (da.lon >= conf.viewRegion[0].lon) & (da.lon <= conf.viewRegion[1].lon)
+    latMask = (da.lat >= conf.viewRegion[0].lat) & (da.lat <= conf.viewRegion[1].lat)
     mask = lonMask & latMask
 
     da = da.where(mask, drop=True)
@@ -22,6 +59,7 @@ def narrowData(da: xr.DataArray) -> xr.DataArray:
 
 
 def createHeatmap(
+    conf: ProgramConfig,
     body: spatial.Body,
     da: xr.DataArray,
     title: str,
@@ -37,7 +75,7 @@ def createHeatmap(
     fig.grdcontour(  # type: ignore
         grid=body.grid,
         pen="0.75p,blue",  # Contour line style
-        projection="M15c",
+        projection=conf.projection,
     )
 
     # Create a colormap for the secondary data
@@ -56,19 +94,19 @@ def createHeatmap(
         grid=maskedResults,
         cmap=True,  # Use the previously created colormap
         transparency=25,  # Optional transparency level (0-100)
-        projection="M15c",
+        projection=conf.projection,
     )
     fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c")  # type: ignore
 
     # Add map frame and labels
     fig.basemap(  # type: ignore
         region=[
-            VIEW_REGION[0].lon,
-            VIEW_REGION[1].lon,
-            VIEW_REGION[0].lat,
-            VIEW_REGION[1].lat,
+            conf.viewRegion[0].lon,
+            conf.viewRegion[1].lon,
+            conf.viewRegion[0].lat,
+            conf.viewRegion[1].lat,
         ],
-        projection="M15c",
+        projection=conf.projection,
         frame=["afg", f"+t{title}"],
         map_scale="jBR+w500e",
     )
@@ -79,115 +117,160 @@ def createHeatmap(
         fig.savefig(savePath)  # type: ignore
 
 
-def printStats(da: xr.DataArray) -> None:
-    masked = np.ma.masked_invalid(da)  # type: ignore
-    print(f"mean: {masked.mean()}")  # type: ignore
-    print(f"std: {masked.std()}")  # type: ignore
-
-
 def main() -> None:
+    conf = getConfig()
+
     # Open files
-    with xr.open_dataarray("data/drats/SiteK.nc") as da:  # type: ignore
-        siteK = da.load()  # type: ignore
-    with xr.open_dataarray("data/lwchm_earth_sp_crater.nc") as da:  # type: ignore
-        lwchmResults = da.load()  # type: ignore
-    with xr.open_dataarray("data/splat_earth_sp_crater.nc") as da:  # type: ignore
-        splatResults = da.load()  # type: ignore
-    with xr.open_dataarray("data/itm_earth_sp_crater.nc") as da:  # type: ignore
-        itmResults = da.load()  # type: ignore
+    with xr.open_dataarray(conf.dratsData) as da:  # type: ignore
+        dratsData = da.load()  # type: ignore
+    with xr.open_dataarray(conf.lwchmData) as da:  # type: ignore
+        lwchmData = da.load()  # type: ignore
+    with xr.open_dataarray(conf.splatData) as da:  # type: ignore
+        splatData = da.load()  # type: ignore
+    with xr.open_dataarray(conf.itmData) as da:  # type: ignore
+        itmData = da.load()  # type: ignore
 
     # Narrow and reindex files
-    siteK = narrowData(siteK)
-    lwchmResults = narrowData(lwchmResults)
-    splatResults = narrowData(splatResults)
-    itmResults = narrowData(itmResults)
+    dratsData = narrowData(conf, dratsData)
+    lwchmData = narrowData(conf, lwchmData)
+    splatData = narrowData(conf, splatData)
+    itmData = narrowData(conf, itmData)
 
-    body = spatial.Body("earth", "01s", VIEW_REGION[0], VIEW_REGION[1])
+    lwchmData = lwchmData.where(np.isfinite(lwchmData), NO_SIGNAL_LEVEL)
+
+    body = spatial.Body("earth", "01s", conf.viewRegion[0], conf.viewRegion[1])
     grid = body.grid
-    siteK = siteK.reindex_like(
+    dratsData = dratsData.reindex_like(
         grid,
         method="nearest",
         tolerance=1e-6,
         fill_value=-np.inf,  # type: ignore
     )
-    lwchmResults = lwchmResults.reindex_like(
+    lwchmData = lwchmData.reindex_like(
         grid,
         method="nearest",
         tolerance=1e-6,
         fill_value=-np.inf,  # type: ignore
     )
-    splatResults = splatResults.reindex_like(
+    splatData = splatData.reindex_like(
         grid,
         method="nearest",
         tolerance=1e-6,
         fill_value=-np.inf,  # type: ignore
     )
-    itmResults = itmResults.reindex_like(
+    itmData = itmData.reindex_like(
         grid,
         method="nearest",
         tolerance=1e-6,
         fill_value=-np.inf,  # type: ignore
     )
 
-    lwchmDiff = lwchmResults - siteK
-    splatDiff = splatResults - siteK
-    itmDiff = itmResults - siteK
+    lwchmDiff = lwchmData - dratsData
+    splatDiff = splatData - dratsData
+    itmDiff = itmData - dratsData
 
-    print("LWCHM Diff")
-    printStats(lwchmDiff)
-    print("Splat Diff")
-    printStats(splatDiff)
-    print("ITM Diff")
-    printStats(itmDiff)
-
-    # Get absolute min and max diff
+    # Compute and write statistics
+    maskedLwchmDiff = lwchmDiff.where(np.isfinite(lwchmDiff), np.nan)
     maskedSplatDiff = splatDiff.where(np.isfinite(splatDiff), np.nan)
     maskedItmDiff = itmDiff.where(np.isfinite(itmDiff), np.nan)
-    diffMin = maskedSplatDiff.min().item()
+
+    lwchmDiffMean = maskedLwchmDiff.mean().item()
+    splatDiffMean = maskedSplatDiff.mean().item()
+    itmDiffMean = maskedItmDiff.mean().item()
+    lwchmDiffStd = maskedLwchmDiff.std().item()
+    splatDiffStd = maskedSplatDiff.std().item()
+    itmDiffStd = maskedItmDiff.std().item()
+
+    print(f"LWCHM Diff:\nmean: {lwchmDiffMean}\nstd: {lwchmDiffStd}\n")
+    print(f"Splat Diff:\nmean: {splatDiffMean}\nstd: {splatDiffStd}\n")
+    print(f"ITM Diff:\nmean: {itmDiffMean}\nstd: {itmDiffStd}\n")
+
+    conf.outputPath.mkdir(exist_ok=True, parents=True)
+    with open(conf.outputPath / "stats.csv", mode="w", newline="") as csvFile:
+        writer = csv.writer(csvFile)
+        writer.writerow(("Model", "Mean", "Std"))
+        writer.writerow(("LWCHM", lwchmDiffMean, lwchmDiffStd))
+        writer.writerow(("Splat", splatDiffMean, splatDiffStd))
+        writer.writerow(("ITM", itmDiffMean, itmDiffStd))
+
+    # Get absolute min and max diff
+    diffMin = maskedLwchmDiff.min().item()
+    if (splatMin := maskedSplatDiff.min().item()) < diffMin:
+        diffMin = splatMin
     if (itmMin := maskedItmDiff.min().item()) < diffMin:
         diffMin = itmMin
-    diffMax = maskedSplatDiff.max().item()
-    if (itmMin := maskedItmDiff.max().item()) > diffMax:
-        diffMax = itmMin
+
+    diffMax = maskedLwchmDiff.max().item()
+    if (splatMax := maskedSplatDiff.max().item()) > diffMax:
+        diffMax = splatMax
+    if (itmMax := maskedItmDiff.max().item()) > diffMax:
+        diffMax = itmMax
 
     # Create figures
     createHeatmap(
-        body, siteK, "Site K", -150, 0, pathlib.Path(R"data/figures/SiteK.png")
+        conf,
+        body,
+        dratsData,
+        f"{conf.name}: DRATS",
+        -150,
+        0,
+        conf.outputPath / "drats.png",
     )
     createHeatmap(
-        body, lwchmResults, "LWCHM", -150, 0, pathlib.Path(R"data/figures/LWCHM.png")
+        conf,
+        body,
+        lwchmData,
+        f"{conf.name}: LWCHM",
+        -150,
+        0,
+        conf.outputPath / "lwchm.png",
     )
     createHeatmap(
-        body, splatResults, "Splat", -150, 0, pathlib.Path(R"data/figures/Splat.png")
+        conf,
+        body,
+        splatData,
+        f"{conf.name}: Splat",
+        -150,
+        0,
+        conf.outputPath / "splat.png",
     )
     createHeatmap(
-        body, itmResults, "ITM", -150, 0, pathlib.Path(R"data/figures/ITM.png")
+        conf,
+        body,
+        itmData,
+        f"{conf.name}: ITM",
+        -150,
+        0,
+        conf.outputPath / "ITM.png",
     )
+
     createHeatmap(
+        conf,
         body,
         lwchmDiff,
-        "LWCHM Delta from Site K",
+        f"{conf.name}: LWCHM Diff",
         diffMin,
         diffMax,
-        pathlib.Path(R"data/figures/LwchmDiff.png"),
+        conf.outputPath / "lwchmDiff.png",
     )
     createHeatmap(
+        conf,
         body,
         splatDiff,
-        "Splat Delta from Site K",
+        f"{conf.name}: Splat Diff",
         diffMin,
         diffMax,
-        pathlib.Path(R"data/figures/SplatDiff.png"),
+        conf.outputPath / "splatDiff.png",
     )
     createHeatmap(
+        conf,
         body,
         itmDiff,
-        "ITM Delta from Site K",
+        f"{conf.name}: ITM Diff",
         diffMin,
         diffMax,
-        pathlib.Path(R"data/figures/ItmDiff.png"),
+        conf.outputPath / "itmDiff.png",
     )
-    pass
 
 
 if __name__ == "__main__":
