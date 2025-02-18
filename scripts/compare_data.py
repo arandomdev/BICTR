@@ -25,10 +25,13 @@ class ProgramConfig(object):
     viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
     projection: str
 
+    suppressFigures: bool
+
 
 def getConfig() -> ProgramConfig:
     parser = argparse.ArgumentParser("compare_data.py")
     parser.add_argument("config", type=pathlib.Path)
+    parser.add_argument("--suppress-figures", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
     with open(args.config) as configFile:
@@ -46,6 +49,7 @@ def getConfig() -> ProgramConfig:
             spatial.PointGeo(rawConf["viewRegion"][1][0], rawConf["viewRegion"][1][1]),
         ),
         projection=rawConf["projection"],
+        suppressFigures=args.suppress_figures,
     )
 
 
@@ -111,7 +115,8 @@ def createHeatmap(
         map_scale="jBR+w500e",
     )
 
-    fig.show()  # type: ignore
+    if not conf.suppressFigures:
+        fig.show()  # type: ignore
 
     if savePath is not None:
         fig.savefig(savePath)  # type: ignore
@@ -137,6 +142,8 @@ def main() -> None:
     itmData = narrowData(conf, itmData)
 
     lwchmData = lwchmData.where(np.isfinite(lwchmData), NO_SIGNAL_LEVEL)
+    splatData = splatData.where(np.isfinite(splatData), NO_SIGNAL_LEVEL)
+    itmData = itmData.where(np.isfinite(itmData), NO_SIGNAL_LEVEL)
 
     body = spatial.Body("earth", "01s", conf.viewRegion[0], conf.viewRegion[1])
     grid = body.grid
@@ -241,7 +248,7 @@ def main() -> None:
         f"{conf.name}: ITM",
         -150,
         0,
-        conf.outputPath / "ITM.png",
+        conf.outputPath / "itm.png",
     )
 
     createHeatmap(

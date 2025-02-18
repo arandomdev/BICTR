@@ -119,6 +119,7 @@ class Body(object):
         resolution: str,
         coord1: PointGeo,
         coord2: PointGeo,
+        extraSize: float = 0,
     ) -> None:
         """Construct a Body.
 
@@ -127,16 +128,19 @@ class Body(object):
             resolution: The gridline resolution to pass to pygmt's load relief
             coord1: The first corner defining the grid to load
             coord2: The second corner defining the grid to load
+            additionalSize: Extra area to load around the box
         """
 
+        self.radius = RADIUS_MAP[body]
+        extraSizeDeg = np.rad2deg(extraSize / self.radius)
+
         region = [
-            coord1.lon,
-            coord2.lon,
-            coord1.lat,
-            coord2.lat,
+            coord1.lon - extraSizeDeg,
+            coord2.lon + extraSizeDeg,
+            coord1.lat - extraSizeDeg,
+            coord2.lat + extraSizeDeg,
         ]
 
-        self.radius = RADIUS_MAP[body]
         if body == "moon":
             self.grid = pygmt.datasets.load_moon_relief(
                 resolution=resolution,  # type: ignore

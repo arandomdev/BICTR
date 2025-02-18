@@ -1,33 +1,24 @@
 {
-    "resultsPath": "data/lwchm/siteK.nc",
+    "resultsPath": "data/lwchm/siteF_track.nc",
     "workers": -1,
     "body": "earth",
     "resolution": "01s",
-    "scanMode": "region",
-    "scanRegion": [
-        [
-            -111.655615,
-            35.568169
-        ],
-        [
-            -111.610698,
-            35.613086
-        ]
-    ],
-    "scanTrack": null,
+    "scanMode": "track",
+    "scanRegion": null,
+    "scanTrack": "data/drats/siteF.nc",
     "tx": [
-        -111.633156,
-        35.590627
+        -111.653278,
+        35.593743
     ],
     "txHeight": 10,
     "rxHeight": 2,
     "model": "lwchm",
     "lwchm": {
         "refCount": 5,
-        "refAttemptPerRing": 3,
+        "refAttemptPerRing": 15,
         "ringRadiusMin": 5,
-        "ringRadiusMax": 300,
-        "ringRadiusUncertainty": 15,
+        "ringRadiusMax": 500,
+        "ringRadiusUncertainty": 25,
         "ringCount": 10,
         "complexRelPermittivityReal": 2.75,
         "complexRelPermittivityRealStd": 0.115,

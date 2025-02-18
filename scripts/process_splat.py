@@ -24,6 +24,9 @@ class KMLData(object):
     east: float
     west: float
 
+    txLon: float
+    txLat: float
+
 
 DCFMapping = dict[tuple[int, int, int], float]
 
@@ -60,20 +63,33 @@ def readKML(kmlFile: IO[bytes]) -> KMLData:
     if (westElem := latLonBox.find("./kml:west", ns)) is None:
         raise LookupError("Unable to find west in kml")
 
+    if (
+        txCoord := root.find("./kml:Folder/kml:Placemark/kml:Point/kml:coordinates", ns)
+    ) is None:
+        raise LookupError("Unable to find transmitter coordinate in kml")
+
     assert isinstance(hrefElem.text, str)
     assert isinstance(northElem.text, str)
     assert isinstance(southElem.text, str)
     assert isinstance(eastElem.text, str)
     assert isinstance(westElem.text, str)
+    assert isinstance(txCoord.text, str)
 
     coveragePath = hrefElem.text
     north = float(northElem.text)
     south = float(southElem.text)
     east = float(eastElem.text)
     west = float(westElem.text)
+    txLon, txLat = (float(c) for c in txCoord.text.split(",")[:2])
 
     return KMLData(
-        coveragePath=coveragePath, north=north, south=south, east=east, west=west
+        coveragePath=coveragePath,
+        north=north,
+        south=south,
+        east=east,
+        west=west,
+        txLon=txLon,
+        txLat=txLat,
     )
 
 
@@ -157,7 +173,6 @@ def main() -> None:
         dcfMapping,
     )
 
-    # Save to file
     results = xr.DataArray(
         signalStrengths,
         dims=["lat", "lon"],
@@ -166,6 +181,18 @@ def main() -> None:
             "lon": lonAxis,
         },
     )
+
+    # Near the transmitter is set to -inf, change it to -50dbm
+    nearest = results.sel(lat=kmlData.txLat, lon=kmlData.txLon, method="nearest")  # type: ignore
+    nearestLatIdx = results.indexes["lat"].get_loc(nearest.lat.item())  # type: ignore
+    nearestLonIdx = results.indexes["lon"].get_loc(nearest.lon.item())  # type: ignore
+    results[
+        nearestLatIdx - 3 : nearestLatIdx + 4, nearestLonIdx - 3 : nearestLonIdx + 4
+    ] = results[
+        nearestLatIdx - 3 : nearestLatIdx + 4, nearestLonIdx - 3 : nearestLonIdx + 4
+    ].where(np.isfinite, -50)
+
+    # Save to file
     results.to_netcdf(args.output_path)  # type: ignore
     pass
 

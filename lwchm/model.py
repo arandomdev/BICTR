@@ -4,6 +4,7 @@ from typing import cast
 
 import numpy as np
 import numpy.typing as npt
+import scipy.signal  # type: ignore
 from scipy import constants  # type: ignore
 
 from lwchm import propagation, signal, spatial
@@ -254,7 +255,7 @@ class LWCHM(object):
             firCoeffs /= self._config.refCount + 1
 
             # Pass signal through filter
-            rxWave = np.convolve(firCoeffs, txWave)
-            return signal.ReceiveSignal(wave=rxWave)
+            rxWave = scipy.signal.convolve(firCoeffs, txWave)  # type: ignore
+            return signal.ReceiveSignal(wave=rxWave)  # type: ignore
         else:
             return None  # No signal due to no paths

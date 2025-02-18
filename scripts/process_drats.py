@@ -217,9 +217,7 @@ def main() -> None:
         print(f"Processing, {prog}/{totalProg}, or {prog / totalProg * 100:.2f}%")
 
         for lon in siteAligned.lon:
-            nearest = site.sel(  # type: ignore
-                lat=lat, lon=lon, method="nearest"
-            )
+            nearest = site.sel(lat=lat, lon=lon, method="nearest")  # type: ignore
             nearestLatIdx = site.indexes["lat"].get_loc(nearest.lat.item())  # type: ignore
             nearestLonIdx = site.indexes["lon"].get_loc(nearest.lon.item())  # type: ignore
 

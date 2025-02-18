@@ -24,8 +24,10 @@ class Configuration(object):
     body: Literal["moon", "earth"]
     resolution: str
 
-    viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
-    scanRegion: tuple[spatial.PointGeo, spatial.PointGeo]
+    scanMode: Literal["region", "track"]
+    scanRegion: tuple[spatial.PointGeo, spatial.PointGeo] | None
+    scanTrack: pathlib.Path | None
+
     tx: spatial.PointGeo
     txHeight: float
     rxHeight: float
@@ -48,14 +50,16 @@ class Configuration(object):
         self.body = raw["body"]
         self.resolution = raw["resolution"]
 
-        self.viewRegion = (
-            spatial.PointGeo(raw["viewRegion"][0][0], raw["viewRegion"][0][1]),
-            spatial.PointGeo(raw["viewRegion"][1][0], raw["viewRegion"][1][1]),
-        )
-        self.scanRegion = (
-            spatial.PointGeo(raw["scanRegion"][0][0], raw["scanRegion"][0][1]),
-            spatial.PointGeo(raw["scanRegion"][1][0], raw["scanRegion"][1][1]),
-        )
+        self.scanMode = raw["scanMode"]
+        if self.scanMode == "region":
+            self.scanRegion = (
+                spatial.PointGeo(raw["scanRegion"][0][0], raw["scanRegion"][0][1]),
+                spatial.PointGeo(raw["scanRegion"][1][0], raw["scanRegion"][1][1]),
+            )
+        elif self.scanMode == "track":
+            self.scanTrack = pathlib.Path(raw["scanTrack"])
+        else:
+            raise NotImplementedError
 
         self.tx = spatial.PointGeo(raw["tx"][0], raw["tx"][1])
         self.txHeight = raw["txHeight"]
@@ -74,6 +78,8 @@ class Configuration(object):
             rawPskConf = raw["psk"]
             rawPskConf["data"] = data
             self.pskConf = lwchm.signal.PSKConfiguration(**rawPskConf)
+        else:
+            raise NotImplementedError
 
         self.projection = raw["projection"]
 
@@ -105,6 +111,58 @@ def getArgs() -> Configuration:
     parser.add_argument("config_file", type=pathlib.Path)
     configPath = cast(pathlib.Path, parser.parse_args().config_file)
     return Configuration(json.loads(configPath.read_text()))
+
+
+def getBodyAndAxes(
+    progConfig: Configuration,
+) -> tuple[spatial.Body, xr.DataArray, xr.DataArray]:
+    assert progConfig.lwchmConf is not None
+
+    if progConfig.scanMode == "region":
+        assert progConfig.scanRegion is not None
+        body = spatial.Body(
+            progConfig.body,
+            progConfig.resolution,
+            progConfig.scanRegion[0],
+            progConfig.scanRegion[1],
+            progConfig.lwchmConf.ringRadiusMax
+            + progConfig.lwchmConf.ringRadiusUncertainty,
+        )
+        lonAxis = body.grid.lon.sel(
+            lon=slice(progConfig.scanRegion[0].lon, progConfig.scanRegion[1].lon)
+        )
+        latAxis = body.grid.lat.sel(
+            lat=slice(progConfig.scanRegion[0].lat, progConfig.scanRegion[1].lat)
+        )
+
+    elif progConfig.scanMode == "track":
+        with xr.open_dataarray(progConfig.scanTrack) as track:  # type: ignore
+            lonMin = track.lon.min().item()
+            latMin = track.lat.min().item()
+            lonMax = track.lon.max().item()
+            latMax = track.lat.max().item()
+            body = spatial.Body(
+                progConfig.body,
+                progConfig.resolution,
+                spatial.PointGeo(lonMin, latMin),
+                spatial.PointGeo(lonMax, latMax),
+                progConfig.lwchmConf.ringRadiusMax
+                + progConfig.lwchmConf.ringRadiusUncertainty,
+            )
+
+            track = track.reindex_like(body.grid, method="nearest", tolerance=1e-6)
+            nearestLow = track.sel(lat=latMin, lon=lonMin, method="nearest")  # type: ignore
+            nearestHigh = track.sel(lat=latMax, lon=lonMax, method="nearest")  # type: ignore
+            lonAxis = track.lon.sel(
+                lon=slice(nearestLow.lon.item(), nearestHigh.lon.item())
+            )
+            latAxis = track.lat.sel(
+                lat=slice(nearestLow.lat.item(), nearestHigh.lat.item())
+            )
+    else:
+        raise NotImplementedError
+
+    return body, lonAxis, latAxis
 
 
 def scanRegionMultiWorkerInit(
@@ -139,25 +197,12 @@ def scanRegionMultiWorker(
             since the last update from this process
     """
 
-    body = spatial.Body(
-        progConfig.body,
-        progConfig.resolution,
-        progConfig.viewRegion[0],
-        progConfig.viewRegion[1],
-    )
-
     assert progConfig.modelType == "lwchm"
     assert progConfig.lwchmConf is not None
+    body, lonAxis, latAxis = getBodyAndAxes(progConfig)
     chModel = model.LWCHM(body, progConfig.lwchmConf)
 
     # Construct dataarray from shared memory
-    lonAxis = body.grid.lon.sel(
-        lon=slice(progConfig.scanRegion[0].lon, progConfig.scanRegion[1].lon)
-    )
-    latAxis = body.grid.lat.sel(
-        lat=slice(progConfig.scanRegion[0].lat, progConfig.scanRegion[1].lat)
-    )
-
     resultsArr = np.frombuffer(resultsMem, dtype=np.float64)
     resultsArr = resultsArr.reshape((len(latAxis), len(lonAxis)))
 
@@ -204,15 +249,23 @@ def scanRegionMultiWorker(
 
 
 def showHeatmap(
-    progConfig: Configuration, body: spatial.Body, results: xr.DataArray
+    progConfig: Configuration,
+    body: spatial.Body,
+    results: xr.DataArray,
 ) -> None:
     fig = pygmt.Figure()
 
     maskedResults = results.where(np.isfinite(results), np.nan)
 
+    regionPoints = [
+        results.lon.min().item(),
+        results.lon.max().item(),
+        results.lat.min().item(),
+        results.lat.max().item(),
+    ]
     fig.grdcontour(  # type: ignore
         grid=body.grid,
-        # annotation="1000+f8p",  # Annotate contours every 1000 meters
+        region=regionPoints,
         pen="0.75p,blue",  # Contour line style
         projection=progConfig.projection,
     )
@@ -236,16 +289,10 @@ def showHeatmap(
         transparency=25,  # Optional transparency level (0-100)
         projection=progConfig.projection,
     )
-    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"])  # type: ignore
+    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c")  # type: ignore
 
     # Add map frame and labels
     fig.basemap(  # type: ignore
-        region=[
-            progConfig.viewRegion[0].lon,
-            progConfig.viewRegion[1].lon,
-            progConfig.viewRegion[0].lat,
-            progConfig.viewRegion[1].lat,
-        ],
         projection=progConfig.projection,
         frame=["afg"],
         map_scale="jBR+w500e",
@@ -258,29 +305,30 @@ def main() -> None:
     progConfig = getArgs()
 
     # Create body now incase the relief needs to be downloaded
-    body = spatial.Body(
-        progConfig.body,
-        progConfig.resolution,
-        progConfig.viewRegion[0],
-        progConfig.viewRegion[1],
-    )
-
-    # Get axes
     print("Initializing")
-    lonAxis = body.grid.lon.sel(
-        lon=slice(progConfig.scanRegion[0].lon, progConfig.scanRegion[1].lon)
-    )
-    latAxis = body.grid.lat.sel(
-        lat=slice(progConfig.scanRegion[0].lat, progConfig.scanRegion[1].lat)
-    )
+    body, lonAxis, latAxis = getBodyAndAxes(progConfig)
 
     # generate list of transceiver locations
     transceivers: list[spatial.PointGeo] = [progConfig.tx]
-    for lon in lonAxis:
-        for lat in latAxis:
-            point = spatial.PointGeo(lon=lon, lat=lat)
-            if point != progConfig.tx:
-                transceivers.append(point)
+    if progConfig.scanMode == "region":
+        for lon in lonAxis:
+            for lat in latAxis:
+                point = spatial.PointGeo(lon=lon, lat=lat)
+                if point != progConfig.tx:
+                    transceivers.append(point)
+    elif progConfig.scanMode == "track":
+        assert progConfig.scanTrack is not None
+        with xr.open_dataarray(progConfig.scanTrack) as track:  # type: ignore
+            track = track.reindex_like(body.grid, method="nearest", tolerance=1e-6)
+            trackStacked = track.stack(point=["lat", "lon"])
+            trackStacked = trackStacked[np.isfinite(trackStacked)]
+
+            for point in trackStacked:
+                pointCoord = spatial.PointGeo(point.lon.item(), point.lat.item())
+                if pointCoord != progConfig.tx:
+                    transceivers.append(pointCoord)
+    else:
+        raise NotImplementedError
 
     # Load results into shared memory
     if not progConfig.resultsPath.exists():
@@ -291,6 +339,7 @@ def main() -> None:
                 "lat": latAxis,
             },
         )
+        progConfig.resultsPath.parent.mkdir(exist_ok=True, parents=True)
         results.to_netcdf(progConfig.resultsPath)  # type: ignore
     else:
         with xr.open_dataarray(progConfig.resultsPath) as da:  # type: ignore

@@ -3,16 +3,7 @@
     "workers": -1,
     "body": "earth",
     "resolution": "01s",
-    "viewRegion": [
-        [
-            -111.615493,
-            35.593081
-        ],
-        [
-            -111.56878,
-            35.639794
-        ]
-    ],
+    "scanMode": "region",
     "scanRegion": [
         [
             -111.614595,
@@ -23,6 +14,7 @@
             35.638896
         ]
     ],
+    "scanTrack": null,
     "tx": [
         -111.592136,
         35.6164372
@@ -34,8 +26,8 @@
         "refCount": 5,
         "refAttemptPerRing": 3,
         "ringRadiusMin": 5,
-        "ringRadiusMax": 100,
-        "ringRadiusUncertainty": 10,
+        "ringRadiusMax": 300,
+        "ringRadiusUncertainty": 15,
         "ringCount": 10,
         "complexRelPermittivityReal": 2.75,
         "complexRelPermittivityRealStd": 0.115,

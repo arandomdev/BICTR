@@ -1,0 +1,19 @@
+{
+    "name": "Site F",
+    "dratsData": "data/drats/siteF.nc",
+    "lwchmData": "data/lwchm/siteF_track.nc",
+    "splatData": "data/splat/siteF.nc",
+    "itmData": "data/itm/siteF.nc",
+    "outputPath": "data/compare/siteF_track",
+    "viewRegion": [
+        [
+            -111.676635,
+            35.570387
+        ],
+        [
+            -111.629922,
+            35.6171
+        ]
+    ],
+    "projection": "M15c"
+}

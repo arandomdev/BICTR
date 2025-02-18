@@ -1,13 +1,6 @@
 import argparse
 import math
 
-# LAT = 35.590789
-# LONG = -111.632100
-
-# SCAN_RADIUS = 2500
-# VIEW_PORT_EXTRA = 100
-
-
 EARTH_RAD = 6378137
 
 
