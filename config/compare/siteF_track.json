@@ -1,5 +1,6 @@
 {
     "name": "Site F",
+    "lwchmTitle": "BICTR (Aggressive)",
     "dratsData": "data/drats/siteF.nc",
     "lwchmData": "data/lwchm/siteF_track.nc",
     "splatData": "data/splat/siteF.nc",

@@ -17,7 +17,7 @@
     "scanTrack": null,
     "tx": [
         -111.592136,
-        35.6164372
+        35.616437
     ],
     "txHeight": 10,
     "rxHeight": 2,
@@ -29,10 +29,10 @@
         "ringRadiusMax": 300,
         "ringRadiusUncertainty": 15,
         "ringCount": 10,
-        "complexRelPermittivityReal": 2.75,
-        "complexRelPermittivityRealStd": 0.115,
-        "complexRelPermittivityImag": 0.13,
-        "complexRelPermittivityImagStd": 0.047,
+        "complexRelPermittivityReal": 6.847824,
+        "complexRelPermittivityRealStd": 0.007099,
+        "complexRelPermittivityImag": -0.836473,
+        "complexRelPermittivityImagStd": 0.001295,
         "fadingPaths": 1024,
         "fadingDopplerSpread": 1
     },

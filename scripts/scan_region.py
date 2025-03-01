@@ -125,8 +125,11 @@ def getBodyAndAxes(
             progConfig.resolution,
             progConfig.scanRegion[0],
             progConfig.scanRegion[1],
-            progConfig.lwchmConf.ringRadiusMax
-            + progConfig.lwchmConf.ringRadiusUncertainty,
+            (
+                progConfig.lwchmConf.ringRadiusMax
+                + progConfig.lwchmConf.ringRadiusUncertainty
+            )
+            * 2,
         )
         lonAxis = body.grid.lon.sel(
             lon=slice(progConfig.scanRegion[0].lon, progConfig.scanRegion[1].lon)
@@ -146,8 +149,11 @@ def getBodyAndAxes(
                 progConfig.resolution,
                 spatial.PointGeo(lonMin, latMin),
                 spatial.PointGeo(lonMax, latMax),
-                progConfig.lwchmConf.ringRadiusMax
-                + progConfig.lwchmConf.ringRadiusUncertainty,
+                (
+                    progConfig.lwchmConf.ringRadiusMax
+                    + progConfig.lwchmConf.ringRadiusUncertainty
+                )
+                * 2,
             )
 
             track = track.reindex_like(body.grid, method="nearest", tolerance=1e-6)

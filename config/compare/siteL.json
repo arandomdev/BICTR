@@ -1,5 +1,6 @@
 {
     "name": "Site L",
+    "lwchmTitle": "BICTR (Fast)",
     "dratsData": "data/drats/siteL.nc",
     "lwchmData": "data/lwchm/siteL.nc",
     "splatData": "data/splat/siteL.nc",

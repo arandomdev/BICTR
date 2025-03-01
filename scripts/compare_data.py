@@ -16,6 +16,8 @@ NO_SIGNAL_LEVEL = -150
 @dataclass
 class ProgramConfig(object):
     name: str
+    lwchmTitle: str
+
     dratsData: pathlib.Path
     lwchmData: pathlib.Path
     splatData: pathlib.Path
@@ -39,6 +41,7 @@ def getConfig() -> ProgramConfig:
 
     return ProgramConfig(
         name=rawConf["name"],
+        lwchmTitle=rawConf["lwchmTitle"],
         dratsData=pathlib.Path(rawConf["dratsData"]),
         lwchmData=pathlib.Path(rawConf["lwchmData"]),
         splatData=pathlib.Path(rawConf["splatData"]),
@@ -188,7 +191,7 @@ def main() -> None:
     splatDiffStd = maskedSplatDiff.std().item()
     itmDiffStd = maskedItmDiff.std().item()
 
-    print(f"LWCHM Diff:\nmean: {lwchmDiffMean}\nstd: {lwchmDiffStd}\n")
+    print(f"BICTR Diff:\nmean: {lwchmDiffMean}\nstd: {lwchmDiffStd}\n")
     print(f"Splat Diff:\nmean: {splatDiffMean}\nstd: {splatDiffStd}\n")
     print(f"ITM Diff:\nmean: {itmDiffMean}\nstd: {itmDiffStd}\n")
 
@@ -196,7 +199,7 @@ def main() -> None:
     with open(conf.outputPath / "stats.csv", mode="w", newline="") as csvFile:
         writer = csv.writer(csvFile)
         writer.writerow(("Model", "Mean", "Std"))
-        writer.writerow(("LWCHM", lwchmDiffMean, lwchmDiffStd))
+        writer.writerow(("BICTR", lwchmDiffMean, lwchmDiffStd))
         writer.writerow(("Splat", splatDiffMean, splatDiffStd))
         writer.writerow(("ITM", itmDiffMean, itmDiffStd))
 
@@ -227,10 +230,10 @@ def main() -> None:
         conf,
         body,
         lwchmData,
-        f"{conf.name}: LWCHM",
+        f"{conf.name}: {conf.lwchmTitle}",
         -150,
         0,
-        conf.outputPath / "lwchm.png",
+        conf.outputPath / "bictr.png",
     )
     createHeatmap(
         conf,
@@ -255,10 +258,10 @@ def main() -> None:
         conf,
         body,
         lwchmDiff,
-        f"{conf.name}: LWCHM Diff",
+        f"{conf.name}: {conf.lwchmTitle} Diff",
         diffMin,
         diffMax,
-        conf.outputPath / "lwchmDiff.png",
+        conf.outputPath / "bictrDiff.png",
     )
     createHeatmap(
         conf,

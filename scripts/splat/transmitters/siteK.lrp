@@ -1,7 +1,7 @@
-6.700	; Earth Dielectric Constant (Relative permittivity)
-0.005	; Earth Conductivity (Siemens per meter)
+7.058396	; Earth Dielectric Constant (Relative permittivity)
+0.043795	; Earth Conductivity (Siemens per meter)
 256.300	; Atmospheric Bending Constant (N-Units)
-915.000	; Frequency in MHz (20 MHz to 20 GHz)
+913.000	; Frequency in MHz (20 MHz to 20 GHz)
 5	; Radio Climate
 1	; Polarization (0 = Horizontal, 1 = Vertical)
 0.50	; Fraction of Situations
