@@ -27,6 +27,7 @@ class LWCHMConfiguration(object):
     complexRelPermittivityRealStd: float
     complexRelPermittivityImag: float
     complexRelPermittivityImagStd: float
+    horizontalPolarization: bool
 
     # Rayleigh fading
     fadingPaths: int
@@ -213,9 +214,17 @@ class LWCHM(object):
                     self._config.complexRelPermittivityImagStd,
                 )
             )
-            reflectPolarizations = np.sqrt(
-                complexRelPermittivity - np.square(np.cos(reflectAngles))
-            )
+
+            if self._config.horizontalPolarization:
+                reflectPolarizations = np.sqrt(
+                    complexRelPermittivity - np.square(np.cos(reflectAngles))
+                )
+            else:
+                reflectPolarizations = (
+                    np.sqrt(complexRelPermittivity - np.square(np.cos(reflectAngles)))
+                    / complexRelPermittivity
+                )
+
             reflectCoeffs = (np.sin(reflectAngles) - reflectPolarizations) / (
                 np.sin(reflectAngles) + reflectPolarizations
             )

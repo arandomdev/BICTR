@@ -41,13 +41,14 @@
         "complexRelPermittivityRealStd": 0.0058,
         "complexRelPermittivityImag": 0.06,
         "complexRelPermittivityImagStd": 0.0058,
+        "horizontalPolarization": false,
         "fadingPaths": 1024,
         "fadingDopplerSpread": 1
     },
     "signal": "qpsk",
     "psk": {
         "data": "ZGVhZGJlZWY=",
-        "symbolPeriod": 6e-6,
+        "symbolPeriod": 3.333333e-7,
         "fs": 3e9,
         "carrFs": 913e6,
         "transmitPower": 30

@@ -42,6 +42,7 @@
         "complexRelPermittivityRealStd": 0.115,
         "complexRelPermittivityImag": 0.13,
         "complexRelPermittivityImagStd": 0.047,
+        "horizontalPolarization": false,
         "fadingPaths": 1024,
         "fadingDopplerSpread": 1
     },
