@@ -1,8 +1,10 @@
 import argparse
 import csv
+import enum
 import json
 import pathlib
 from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 import pygmt  # type: ignore
@@ -13,21 +15,97 @@ from lwchm import spatial
 NO_SIGNAL_LEVEL = -150
 
 
+class Site(enum.Enum):
+    A = 0
+    F = 1
+    K = 2
+    L = 3
+
+
+class Source(enum.Enum):
+    DRATS = 0
+    FAST = 1
+    AGGRESSIVE = 2
+    ITWOM = 3
+    ITM = 4
+
+
+type SiteData = dict[Site, dict[Source, xr.DataArray]]
+
+
+SITE_NAME_MAP = {
+    Site.A: "Site A",
+    Site.F: "Site F",
+    Site.K: "Site K",
+    Site.L: "Site L",
+}
+SITE_PATH_MAP = {
+    Site.A: "siteA",
+    Site.F: "siteF",
+    Site.K: "siteK",
+    Site.L: "siteL",
+}
+
+SOURCE_NAME_MAP = {
+    Source.DRATS: "DRATS",
+    Source.FAST: "BICTR (Fast)",
+    Source.AGGRESSIVE: "BICTR (Aggressive)",
+    Source.ITWOM: "ITWOM",
+    Source.ITM: "ITM",
+}
+
+SOURCE_PATH_MAP = {
+    Source.DRATS: "drats.png",
+    Source.FAST: "fast.png",
+    Source.AGGRESSIVE: "aggressive.png",
+    Source.ITWOM: "itwom.png",
+    Source.ITM: "itm.png",
+}
+
+SOURCE_DIFF_PATH_MAP = {
+    Source.FAST: "fastDiff.png",
+    Source.AGGRESSIVE: "aggressiveDiff.png",
+    Source.ITWOM: "itwomDiff.png",
+    Source.ITM: "itmDiff.png",
+}
+
+
+@dataclass
+class SiteConfig(object):
+    drats: pathlib.Path
+    fast: pathlib.Path
+    aggressive: pathlib.Path
+    itwom: pathlib.Path
+    itm: pathlib.Path
+    viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
+
+
 @dataclass
 class ProgramConfig(object):
-    name: str
-    lwchmTitle: str
-
-    dratsData: pathlib.Path
-    lwchmData: pathlib.Path
-    splatData: pathlib.Path
-    itmData: pathlib.Path
-    outputPath: pathlib.Path
-
-    viewRegion: tuple[spatial.PointGeo, spatial.PointGeo]
-    projection: str
+    output: pathlib.Path
+    sites: dict[Site, SiteConfig]
 
     suppressFigures: bool
+
+
+def getSiteConfig(rawConf: dict[str, Any], site: str) -> SiteConfig:
+    return SiteConfig(
+        drats=rawConf[site]["drats"],
+        fast=rawConf[site]["fast"],
+        aggressive=rawConf[site]["aggressive"],
+        itwom=rawConf[site]["itwom"],
+        itm=rawConf[site]["itm"],
+        viewRegion=(
+            spatial.PointGeo(
+                rawConf[site]["viewRegion"][0][0],
+                rawConf[site]["viewRegion"][0][1],
+            ),
+            spatial.PointGeo(
+                rawConf[site]["viewRegion"][1][0],
+                rawConf[site]["viewRegion"][1][1],
+            ),
+        ),
+    )
 
 
 def getConfig() -> ProgramConfig:
@@ -40,247 +118,333 @@ def getConfig() -> ProgramConfig:
         rawConf = json.load(configFile)
 
     return ProgramConfig(
-        name=rawConf["name"],
-        lwchmTitle=rawConf["lwchmTitle"],
-        dratsData=pathlib.Path(rawConf["dratsData"]),
-        lwchmData=pathlib.Path(rawConf["lwchmData"]),
-        splatData=pathlib.Path(rawConf["splatData"]),
-        itmData=pathlib.Path(rawConf["itmData"]),
-        outputPath=pathlib.Path(rawConf["outputPath"]),
-        viewRegion=(
-            spatial.PointGeo(rawConf["viewRegion"][0][0], rawConf["viewRegion"][0][1]),
-            spatial.PointGeo(rawConf["viewRegion"][1][0], rawConf["viewRegion"][1][1]),
-        ),
-        projection=rawConf["projection"],
+        output=pathlib.Path(rawConf["output"]),
+        sites={
+            Site.A: getSiteConfig(rawConf, "siteA"),
+            Site.F: getSiteConfig(rawConf, "siteF"),
+            Site.K: getSiteConfig(rawConf, "siteK"),
+            Site.L: getSiteConfig(rawConf, "siteL"),
+        },
         suppressFigures=args.suppress_figures,
     )
 
 
-def narrowData(conf: ProgramConfig, da: xr.DataArray) -> xr.DataArray:
-    lonMask = (da.lon >= conf.viewRegion[0].lon) & (da.lon <= conf.viewRegion[1].lon)
-    latMask = (da.lat >= conf.viewRegion[0].lat) & (da.lat <= conf.viewRegion[1].lat)
+def narrowData(
+    viewRegion: tuple[spatial.PointGeo, spatial.PointGeo], da: xr.DataArray
+) -> xr.DataArray:
+    lonMask = (da.lon >= viewRegion[0].lon) & (da.lon <= viewRegion[1].lon)
+    latMask = (da.lat >= viewRegion[0].lat) & (da.lat <= viewRegion[1].lat)
     mask = lonMask & latMask
 
     da = da.where(mask, drop=True)
     return da
 
 
-def createHeatmap(
+def loadSiteData(
+    siteConfig: SiteConfig, body: spatial.Body
+) -> dict[Source, xr.DataArray]:
+    sources: dict[Source, xr.DataArray] = {}
+    with xr.open_dataarray(siteConfig.drats) as da:  # type: ignore
+        sources[Source.DRATS] = da.load()  # type: ignore
+    with xr.open_dataarray(siteConfig.fast) as da:  # type: ignore
+        sources[Source.FAST] = da.load()  # type: ignore
+    with xr.open_dataarray(siteConfig.aggressive) as da:  # type: ignore
+        sources[Source.AGGRESSIVE] = da.load()  # type: ignore
+    with xr.open_dataarray(siteConfig.itwom) as da:  # type: ignore
+        sources[Source.ITWOM] = da.load()  # type: ignore
+    with xr.open_dataarray(siteConfig.itm) as da:  # type: ignore
+        sources[Source.ITM] = da.load()  # type: ignore
+
+    for source, da in sources.items():
+        da = narrowData(siteConfig.viewRegion, da)
+        if source != Source.DRATS:
+            da = da.where(np.isfinite(da), NO_SIGNAL_LEVEL)
+
+        da = da.reindex_like(
+            body.grid,
+            method="nearest",
+            tolerance=1e-6,
+            fill_value=-np.inf,  # type: ignore
+        )
+        sources[source] = da
+
+    return sources
+
+
+def computeSiteDiff(sources: dict[Source, xr.DataArray]) -> dict[Source, xr.DataArray]:
+    assert Source.DRATS in sources
+
+    diffs: dict[Source, xr.DataArray] = {}
+    for source, da in sources.items():
+        if source == Source.DRATS:
+            continue
+        diff = da - sources[Source.DRATS]
+        diffs[source] = diff.where(np.isfinite(diff), np.nan)
+
+    return diffs
+
+
+def recordStats(conf: ProgramConfig, siteDiffs: SiteData) -> None:
+    with open(conf.output / "stats.csv", mode="w", newline="") as csvFile:
+        print(
+            "Site  , Model             ,   Mean,   Std\n",
+            "-----------------------------------------",
+            sep="",
+        )
+        writer = csv.writer(csvFile)
+
+        for site, diffs in siteDiffs.items():
+            means = {
+                source: cast(float, da.mean().item()) for (source, da) in diffs.items()
+            }
+            stds = {
+                model: cast(float, da.std().item()) for (model, da) in diffs.items()
+            }
+            rows = [
+                (SITE_NAME_MAP[site], SOURCE_NAME_MAP[s], means[s], stds[s])
+                for s in means
+            ]
+
+            print(
+                "\n".join(
+                    "{0}, {1:<18}, {2:>6.2f}, {3:>5.2f}".format(*row) for row in rows
+                )
+            )
+
+            writer.writerow(("Site", "Model", "Mean", "Std"))
+            writer.writerows(rows)
+
+
+def computeGlobalDiffExtrema(siteDiffData: SiteData) -> tuple[float, float]:
+    mins: list[float] = []
+    maxs: list[float] = []
+    for sources in siteDiffData.values():
+        mins.extend(model.min().item() for model in sources.values())  # type: ignore
+        maxs.extend(model.max().item() for model in sources.values())  # type: ignore
+
+    return min(mins), max(maxs)
+
+
+def createCombinedDiffFigure(
+    siteData: SiteData,
     conf: ProgramConfig,
-    body: spatial.Body,
-    da: xr.DataArray,
-    title: str,
-    scaleMin: float | None = None,
-    scaleMax: float | None = None,
-    savePath: pathlib.Path | None = None,
+    bodies: dict[Site, spatial.Body],
+    scaleMin: float,
+    scaleMax: float,
+    isDiff: bool,
+):
+    for site, sources in siteData.items():
+        region = [
+            conf.sites[site].viewRegion[0].lon,
+            conf.sites[site].viewRegion[1].lon,
+            conf.sites[site].viewRegion[0].lat,
+            conf.sites[site].viewRegion[1].lat,
+        ]
+
+        fig = pygmt.Figure()
+        pygmt.makecpt(  # type: ignore
+            cmap="jet",
+            series=[
+                scaleMin,
+                scaleMax,
+                0.01,
+            ],
+            continuous=True,
+        )
+
+        title = f"{SITE_NAME_MAP[site]} Diff" if isDiff else f"{SITE_NAME_MAP[site]}"
+        with fig.subplot(  # type: ignore
+            nrows=2,
+            ncols=2,
+            subsize="6c",
+            projection="M6c",
+            region=region,
+            frame="agf",
+            sharex="b",
+            sharey="l",
+            title=title,
+            autolabel="+JTC+o0c/0.2c",
+            margins="0.2c",
+        ):
+            with fig.set_panel(0, fixedlabel=SOURCE_NAME_MAP[Source.FAST]):  # type: ignore
+                fig.grdcontour(  # type: ignore
+                    grid=bodies[site].grid,
+                    projection="M?",
+                    pen="0.75p,blue",
+                    region=region,
+                )
+                fig.grdimage(  # type: ignore
+                    grid=sources[Source.FAST],
+                    cmap=True,
+                    transparency=25,
+                    region=region,
+                )
+            with fig.set_panel(1, fixedlabel=SOURCE_NAME_MAP[Source.AGGRESSIVE]):  # type: ignore
+                fig.grdcontour(  # type: ignore
+                    grid=bodies[site].grid,
+                    projection="M?",
+                    pen="0.75p,blue",
+                    region=region,
+                )
+                fig.grdimage(  # type: ignore
+                    grid=sources[Source.AGGRESSIVE],
+                    cmap=True,
+                    transparency=25,
+                    region=region,
+                )
+            with fig.set_panel(2, fixedlabel=SOURCE_NAME_MAP[Source.ITM]):  # type: ignore
+                fig.grdcontour(  # type: ignore
+                    grid=bodies[site].grid,
+                    projection="M?",
+                    pen="0.75p,blue",
+                    region=region,
+                )
+                fig.grdimage(  # type: ignore
+                    grid=sources[Source.ITM],
+                    cmap=True,
+                    transparency=25,
+                    region=region,
+                )
+            with fig.set_panel(3, fixedlabel=SOURCE_NAME_MAP[Source.ITWOM]):  # type: ignore
+                fig.grdcontour(  # type: ignore
+                    grid=bodies[site].grid,
+                    projection="M?",
+                    pen="0.75p,blue",
+                    region=region,
+                )
+                fig.grdimage(  # type: ignore
+                    grid=sources[Source.ITWOM],
+                    cmap=True,
+                    transparency=25,
+                    region=region,
+                )
+
+        if isDiff:
+            fig.colorbar(  # type: ignore
+                frame=["x+lSignal Strength", "y+lΔdBm"], position="JBC+o0c/1c"
+            )
+        else:
+            fig.colorbar(  # type: ignore
+                frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c"
+            )
+
+        if not conf.suppressFigures:
+            fig.show()  # type: ignore
+
+        if isDiff:
+            outputPath = conf.output / SITE_PATH_MAP[site] / "combinedDiff.png"
+        else:
+            outputPath = conf.output / SITE_PATH_MAP[site] / "combined.png"
+        outputPath.parent.mkdir(exist_ok=True, parents=True)
+        fig.savefig(outputPath)  # type: ignore
+
+
+def createIndividualFigures(
+    siteData: SiteData,
+    conf: ProgramConfig,
+    bodies: dict[Site, spatial.Body],
+    scaleMin: float,
+    scaleMax: float,
+    isDiff: bool,
 ) -> None:
-    fig = pygmt.Figure()
+    for site, sources in siteData.items():
+        sitePath = conf.output / SITE_PATH_MAP[site]
+        sitePath.mkdir(exist_ok=True, parents=True)
+        region = [
+            conf.sites[site].viewRegion[0].lon,
+            conf.sites[site].viewRegion[1].lon,
+            conf.sites[site].viewRegion[0].lat,
+            conf.sites[site].viewRegion[1].lat,
+        ]
 
-    # Changing inf to nan creates a cleaner image
-    maskedResults = da.where(np.isfinite(da), np.nan)
+        for source, da in sources.items():
+            fig = pygmt.Figure()
 
-    fig.grdcontour(  # type: ignore
-        grid=body.grid,
-        pen="0.75p,blue",  # Contour line style
-        projection=conf.projection,
-    )
+            fig.grdcontour(  # type: ignore
+                grid=bodies[site].grid,
+                pen="0.75p,blue",
+                projection="M15c",
+                region=region,
+            )
 
-    # Create a colormap for the secondary data
-    pygmt.makecpt(  # type: ignore
-        cmap="jet",  # Color palette
-        series=[
-            scaleMin if scaleMin is not None else maskedResults.min().item(),
-            scaleMax if scaleMax is not None else maskedResults.max().item(),
-            0.01,
-        ],  # Data range [min, max, increment]
-        continuous=True,
-    )
+            # Create a colormap for the secondary data
+            pygmt.makecpt(  # type: ignore
+                cmap="jet",
+                series=[
+                    scaleMin,
+                    scaleMax,
+                    0.01,
+                ],
+                continuous=True,
+            )
 
-    # Overlay the secondary data as a color map
-    fig.grdimage(  # type: ignore
-        grid=maskedResults,
-        cmap=True,  # Use the previously created colormap
-        transparency=25,  # Optional transparency level (0-100)
-        projection=conf.projection,
-    )
-    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c")  # type: ignore
+            # Overlay the secondary data as a color map
+            fig.grdimage(  # type: ignore
+                grid=da,
+                cmap=True,  # Use the previously created colormap
+                transparency=25,  # Optional transparency level (0-100)
+                projection="M15c",
+                region=region,
+            )
+            if isDiff:
+                fig.colorbar(  # type: ignore
+                    frame=["x+lSignal Strength", "y+lΔdBm"], position="JBC+o0c/1c"
+                )
+            else:
+                fig.colorbar(  # type: ignore
+                    frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c"
+                )
 
-    # Add map frame and labels
-    fig.basemap(  # type: ignore
-        region=[
-            conf.viewRegion[0].lon,
-            conf.viewRegion[1].lon,
-            conf.viewRegion[0].lat,
-            conf.viewRegion[1].lat,
-        ],
-        projection=conf.projection,
-        frame=["afg", f"+t{title}"],
-        map_scale="jBR+w500e",
-    )
+            # Add map frame and labels
+            fig.basemap(  # type: ignore
+                region=region,
+                projection="M15c",
+                frame=["afg", f"+t{SITE_NAME_MAP[site]}: {SOURCE_NAME_MAP[source]}"],
+                map_scale="jTR+w500e+f+o0.5+u",
+            )
 
-    if not conf.suppressFigures:
-        fig.show()  # type: ignore
+            if not conf.suppressFigures:
+                fig.show()  # type: ignore
 
-    if savePath is not None:
-        fig.savefig(savePath)  # type: ignore
+            if isDiff:
+                outputPath = sitePath / SOURCE_DIFF_PATH_MAP[source]
+            else:
+                outputPath = sitePath / SOURCE_PATH_MAP[source]
+            fig.savefig(outputPath)  # type: ignore
+    pass
 
 
 def main() -> None:
+    # Load config and data
     conf = getConfig()
+    bodies = {
+        site: spatial.Body("earth", "01s", conf.viewRegion[0], conf.viewRegion[1])
+        for site, conf in conf.sites.items()
+    }
+    siteData = {
+        site: loadSiteData(conf, bodies[site]) for site, conf in conf.sites.items()
+    }
+    maskedSiteData = {
+        site: {
+            source: da.where(np.isfinite(da), np.nan) for source, da in sources.items()
+        }
+        for site, sources in siteData.items()
+    }
+    siteDiffData = {
+        site: computeSiteDiff(sources) for site, sources in siteData.items()
+    }
 
-    # Open files
-    with xr.open_dataarray(conf.dratsData) as da:  # type: ignore
-        dratsData = da.load()  # type: ignore
-    with xr.open_dataarray(conf.lwchmData) as da:  # type: ignore
-        lwchmData = da.load()  # type: ignore
-    with xr.open_dataarray(conf.splatData) as da:  # type: ignore
-        splatData = da.load()  # type: ignore
-    with xr.open_dataarray(conf.itmData) as da:  # type: ignore
-        itmData = da.load()  # type: ignore
+    # Prepare output directory
+    conf.output.mkdir(exist_ok=True, parents=True)
 
-    # Narrow and reindex files
-    dratsData = narrowData(conf, dratsData)
-    lwchmData = narrowData(conf, lwchmData)
-    splatData = narrowData(conf, splatData)
-    itmData = narrowData(conf, itmData)
+    # Stats
+    recordStats(conf, siteDiffData)
 
-    lwchmData = lwchmData.where(np.isfinite(lwchmData), NO_SIGNAL_LEVEL)
-    splatData = splatData.where(np.isfinite(splatData), NO_SIGNAL_LEVEL)
-    itmData = itmData.where(np.isfinite(itmData), NO_SIGNAL_LEVEL)
-
-    body = spatial.Body("earth", "01s", conf.viewRegion[0], conf.viewRegion[1])
-    grid = body.grid
-    dratsData = dratsData.reindex_like(
-        grid,
-        method="nearest",
-        tolerance=1e-6,
-        fill_value=-np.inf,  # type: ignore
-    )
-    lwchmData = lwchmData.reindex_like(
-        grid,
-        method="nearest",
-        tolerance=1e-6,
-        fill_value=-np.inf,  # type: ignore
-    )
-    splatData = splatData.reindex_like(
-        grid,
-        method="nearest",
-        tolerance=1e-6,
-        fill_value=-np.inf,  # type: ignore
-    )
-    itmData = itmData.reindex_like(
-        grid,
-        method="nearest",
-        tolerance=1e-6,
-        fill_value=-np.inf,  # type: ignore
-    )
-
-    lwchmDiff = lwchmData - dratsData
-    splatDiff = splatData - dratsData
-    itmDiff = itmData - dratsData
-
-    # Compute and write statistics
-    maskedLwchmDiff = lwchmDiff.where(np.isfinite(lwchmDiff), np.nan)
-    maskedSplatDiff = splatDiff.where(np.isfinite(splatDiff), np.nan)
-    maskedItmDiff = itmDiff.where(np.isfinite(itmDiff), np.nan)
-
-    lwchmDiffMean = maskedLwchmDiff.mean().item()
-    splatDiffMean = maskedSplatDiff.mean().item()
-    itmDiffMean = maskedItmDiff.mean().item()
-    lwchmDiffStd = maskedLwchmDiff.std().item()
-    splatDiffStd = maskedSplatDiff.std().item()
-    itmDiffStd = maskedItmDiff.std().item()
-
-    print(f"BICTR Diff:\nmean: {lwchmDiffMean}\nstd: {lwchmDiffStd}\n")
-    print(f"Splat Diff:\nmean: {splatDiffMean}\nstd: {splatDiffStd}\n")
-    print(f"ITM Diff:\nmean: {itmDiffMean}\nstd: {itmDiffStd}\n")
-
-    conf.outputPath.mkdir(exist_ok=True, parents=True)
-    with open(conf.outputPath / "stats.csv", mode="w", newline="") as csvFile:
-        writer = csv.writer(csvFile)
-        writer.writerow(("Model", "Mean", "Std"))
-        writer.writerow(("BICTR", lwchmDiffMean, lwchmDiffStd))
-        writer.writerow(("Splat", splatDiffMean, splatDiffStd))
-        writer.writerow(("ITM", itmDiffMean, itmDiffStd))
-
-    # Get absolute min and max diff
-    diffMin = maskedLwchmDiff.min().item()
-    if (splatMin := maskedSplatDiff.min().item()) < diffMin:
-        diffMin = splatMin
-    if (itmMin := maskedItmDiff.min().item()) < diffMin:
-        diffMin = itmMin
-
-    diffMax = maskedLwchmDiff.max().item()
-    if (splatMax := maskedSplatDiff.max().item()) > diffMax:
-        diffMax = splatMax
-    if (itmMax := maskedItmDiff.max().item()) > diffMax:
-        diffMax = itmMax
-
-    # Create figures
-    createHeatmap(
-        conf,
-        body,
-        dratsData,
-        f"{conf.name}: DRATS",
-        -150,
-        0,
-        conf.outputPath / "drats.png",
-    )
-    createHeatmap(
-        conf,
-        body,
-        lwchmData,
-        f"{conf.name}: {conf.lwchmTitle}",
-        -150,
-        0,
-        conf.outputPath / "bictr.png",
-    )
-    createHeatmap(
-        conf,
-        body,
-        splatData,
-        f"{conf.name}: Splat",
-        -150,
-        0,
-        conf.outputPath / "splat.png",
-    )
-    createHeatmap(
-        conf,
-        body,
-        itmData,
-        f"{conf.name}: ITM",
-        -150,
-        0,
-        conf.outputPath / "itm.png",
-    )
-
-    createHeatmap(
-        conf,
-        body,
-        lwchmDiff,
-        f"{conf.name}: {conf.lwchmTitle} Diff",
-        diffMin,
-        diffMax,
-        conf.outputPath / "bictrDiff.png",
-    )
-    createHeatmap(
-        conf,
-        body,
-        splatDiff,
-        f"{conf.name}: Splat Diff",
-        diffMin,
-        diffMax,
-        conf.outputPath / "splatDiff.png",
-    )
-    createHeatmap(
-        conf,
-        body,
-        itmDiff,
-        f"{conf.name}: ITM Diff",
-        diffMin,
-        diffMax,
-        conf.outputPath / "itmDiff.png",
-    )
+    minDiff, maxDiff = computeGlobalDiffExtrema(siteDiffData)
+    createCombinedDiffFigure(maskedSiteData, conf, bodies, -150, 0, False)
+    createCombinedDiffFigure(siteDiffData, conf, bodies, minDiff, maxDiff, True)
+    createIndividualFigures(maskedSiteData, conf, bodies, -150, 0, False)
+    createIndividualFigures(siteDiffData, conf, bodies, minDiff, maxDiff, True)
 
 
 if __name__ == "__main__":

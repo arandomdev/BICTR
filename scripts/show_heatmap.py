@@ -14,6 +14,10 @@ class Arguments(argparse.Namespace):
     body: Literal["earth", "moon"]
     resolution: str
     projection: str
+    region: str
+    scale_min: float
+    scale_max: float
+    save_path: pathlib.Path | None
 
 
 def getArgs() -> Arguments:
@@ -22,6 +26,10 @@ def getArgs() -> Arguments:
     parser.add_argument("body", choices=("earth", "moon"))
     parser.add_argument("resolution")
     parser.add_argument("projection")
+    parser.add_argument("region", type=str)
+    parser.add_argument("scale_min", type=float)
+    parser.add_argument("scale_max", type=float)
+    parser.add_argument("--save-path", type=pathlib.Path)
     return parser.parse_args(namespace=Arguments())
 
 
@@ -32,9 +40,11 @@ def main() -> None:
         results = da.load()  # type: ignore
     maskedResults = results.where(np.isfinite(results), np.nan)
 
+    args.region = args.region.replace(" ", "/")
+    regionParts = [float(p) for p in args.region.split("/")]
     boundaryBox = (
-        spatial.PointGeo(results.lon.min().item(), results.lat.min().item()),
-        spatial.PointGeo(results.lon.max().item(), results.lat.max().item()),
+        spatial.PointGeo(regionParts[0], regionParts[2]),
+        spatial.PointGeo(regionParts[1], regionParts[3]),
     )
 
     body = spatial.Body(
@@ -47,46 +57,44 @@ def main() -> None:
     fig = pygmt.Figure()
     fig.grdcontour(  # type: ignore
         grid=body.grid,
-        # annotation="1000+f8p",  # Annotate contours every 1000 meters
         pen="0.75p,blue",  # Contour line style
         projection=args.projection,
+        region=args.region,
     )
 
     # Create a colormap for the secondary data
-
     pygmt.makecpt(  # type: ignore
-        cmap="jet",  # Color palette
+        cmap="jet",
         series=[
-            maskedResults.min().item(),
-            maskedResults.max().item(),
+            args.scale_min,
+            args.scale_max,
             0.01,
-        ],  # Data range [min, max, increment]
-        continuous=True,  # Use continuous colormap
+        ],
+        continuous=True,
     )
 
     # Overlay the secondary data as a color map
     fig.grdimage(  # type: ignore
         grid=maskedResults,
-        cmap=True,  # Use the previously created colormap
-        transparency=25,  # Optional transparency level (0-100)
+        cmap=True,
+        transparency=25,
         projection=args.projection,
+        region=args.region,
     )
-    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"])  # type: ignore
+    fig.colorbar(frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c")  # type: ignore
 
     # Add map frame and labels
     fig.basemap(  # type: ignore
-        region=[
-            boundaryBox[0].lon,
-            boundaryBox[1].lon,
-            boundaryBox[0].lat,
-            boundaryBox[1].lat,
-        ],
+        region=args.region,
         projection=args.projection,
         frame=["afg"],
-        map_scale="jBR+w500e",
+        map_scale="jTR+w500e+f+o0.5+u",
     )
 
     fig.show()  # type: ignore
+
+    if args.save_path:
+        fig.savefig(args.save_path)  # type: ignore
     pass
 
 

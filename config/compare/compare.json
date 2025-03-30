@@ -1,0 +1,71 @@
+{
+    "output": "data/compare",
+    "siteA": {
+        "drats": "data/drats/SiteA.nc",
+        "fast": "data/lwchm/siteA.nc",
+        "aggressive": "data/lwchm/siteA_aggressive.nc",
+        "itwom": "data/splat/siteA.nc",
+        "itm": "data/itm/siteA.nc",
+        "viewRegion": [
+            [
+                -111.615493,
+                35.593081
+            ],
+            [
+                -111.56878,
+                35.639794
+            ]
+        ]
+    },
+    "siteF": {
+        "drats": "data/drats/SiteF.nc",
+        "fast": "data/lwchm/siteF.nc",
+        "aggressive": "data/lwchm/siteF_aggressive.nc",
+        "itwom": "data/splat/siteF.nc",
+        "itm": "data/itm/siteF.nc",
+        "viewRegion": [
+            [
+                -111.676635,
+                35.570387
+            ],
+            [
+                -111.629922,
+                35.6171
+            ]
+        ]
+    },
+    "siteK": {
+        "drats": "data/drats/SiteK.nc",
+        "fast": "data/lwchm/siteK.nc",
+        "aggressive": "data/lwchm/siteK_aggressive.nc",
+        "itwom": "data/splat/siteK.nc",
+        "itm": "data/itm/siteK.nc",
+        "viewRegion": [
+            [
+                -111.656513,
+                35.567271
+            ],
+            [
+                -111.6098,
+                35.613984
+            ]
+        ]
+    },
+    "siteL": {
+        "drats": "data/drats/SiteL.nc",
+        "fast": "data/lwchm/siteL.nc",
+        "aggressive": "data/lwchm/siteL_aggressive.nc",
+        "itwom": "data/splat/siteL.nc",
+        "itm": "data/itm/siteL.nc",
+        "viewRegion": [
+            [
+                -111.62537,
+                35.603542
+            ],
+            [
+                -111.578657,
+                35.650255
+            ]
+        ]
+    }
+}

@@ -1,0 +1,49 @@
+{
+    "resultsPath": "data/lwchm/siteF_aggressive.nc",
+    "workers": -1,
+    "body": "earth",
+    "resolution": "01s",
+    "scanMode": "region",
+    "scanRegion": [
+        [
+            -111.675737,
+            35.571285
+        ],
+        [
+            -111.63082,
+            35.616202
+        ]
+    ],
+    "scanTrack": null,
+    "tx": [
+        -111.653278,
+        35.593743
+    ],
+    "txHeight": 10,
+    "rxHeight": 2,
+    "model": "lwchm",
+    "lwchm": {
+        "refCount": 5,
+        "refAttemptPerRing": 15,
+        "ringRadiusMin": 5,
+        "ringRadiusMax": 500,
+        "ringRadiusUncertainty": 25,
+        "ringCount": 10,
+        "complexRelPermittivityReal": 5.504067,
+        "complexRelPermittivityRealStd": 0.013189,
+        "complexRelPermittivityImag": -0.913576,
+        "complexRelPermittivityImagStd": 0.003634,
+        "horizontalPolarization": false,
+        "fadingPaths": 1024,
+        "fadingDopplerSpread": 1
+    },
+    "signal": "qpsk",
+    "psk": {
+        "data": "ZGVhZGJlZWY=",
+        "symbolPeriod": 3.333333e-7,
+        "fs": 3e9,
+        "carrFs": 913e6,
+        "transmitPower": 30
+    },
+    "projection": "M15c"
+}
