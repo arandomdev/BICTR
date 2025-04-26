@@ -171,7 +171,7 @@ class Body(object):
         lat1 = np.deg2rad(loc.lat)
 
         if loc.lat == 90 or loc.lat == -90:
-            lon2 = bearing
+            lon2 = bearing - np.pi
             lat2 = np.pi / 2 - dist if loc.lat == 90 else -np.pi / 2 + dist
         else:
             lat2 = np.asin(
@@ -179,10 +179,10 @@ class Body(object):
                 + np.cos(lat1) * np.sin(dist) * np.cos(bearing)
             )
 
-        lon2 = lon1 + np.atan2(
-            np.sin(bearing) * np.sin(dist) * np.cos(lat1),
-            np.cos(dist) - np.sin(lat1) * np.sin(lat2),
-        )
+            lon2 = lon1 + np.atan2(
+                np.sin(bearing) * np.sin(dist) * np.cos(lat1),
+                np.cos(dist) - np.sin(lat1) * np.sin(lat2),
+            )
 
         return PointGeo(lon=np.rad2deg(lon2), lat=np.rad2deg(lat2))
 
