@@ -192,6 +192,7 @@ def recordStats(conf: ProgramConfig, siteDiffs: SiteData) -> None:
             sep="",
         )
         writer = csv.writer(csvFile)
+        writer.writerow(("Site", "Model", "Mean", "Std"))
 
         for site, diffs in siteDiffs.items():
             means = {
@@ -211,7 +212,6 @@ def recordStats(conf: ProgramConfig, siteDiffs: SiteData) -> None:
                 )
             )
 
-            writer.writerow(("Site", "Model", "Mean", "Std"))
             writer.writerows(rows)
 
 
