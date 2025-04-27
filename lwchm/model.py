@@ -137,7 +137,7 @@ class LWCHM(object):
 
         # Normalize
         sig *= 2 / np.sqrt(m)
-        avgPower = cast(np.float64, np.mean(np.square(sig)))
+        avgPower = cast(np.float64, np.mean(np.square(np.abs(sig))))
         sig *= np.sqrt(1 / avgPower)
 
         return sig
@@ -204,25 +204,31 @@ class LWCHM(object):
             ) / 2
 
             # Compute reflection coefficient
-            complexRelPermittivity = random.normalvariate(
-                self._config.complexRelPermittivityReal,
-                self._config.complexRelPermittivityRealStd,
-            ) + (
-                1j
-                * random.normalvariate(
-                    self._config.complexRelPermittivityImag,
-                    self._config.complexRelPermittivityImagStd,
-                )
+            complexRelPermittivities = np.array(
+                [
+                    random.normalvariate(
+                        self._config.complexRelPermittivityReal,
+                        self._config.complexRelPermittivityRealStd,
+                    )
+                    + (
+                        1j
+                        * random.normalvariate(
+                            self._config.complexRelPermittivityImag,
+                            self._config.complexRelPermittivityImagStd,
+                        )
+                    )
+                    for _ in range(len(reflectors))
+                ]
             )
 
             if self._config.horizontalPolarization:
                 reflectPolarizations = np.sqrt(
-                    complexRelPermittivity - np.square(np.cos(reflectAngles))
+                    complexRelPermittivities - np.square(np.cos(reflectAngles))
                 )
             else:
                 reflectPolarizations = (
-                    np.sqrt(complexRelPermittivity - np.square(np.cos(reflectAngles)))
-                    / complexRelPermittivity
+                    np.sqrt(complexRelPermittivities - np.square(np.cos(reflectAngles)))
+                    / complexRelPermittivities
                 )
 
             reflectCoeffs = (np.sin(reflectAngles) - reflectPolarizations) / (
@@ -230,9 +236,10 @@ class LWCHM(object):
             )
 
             # Compute phasors
-            reflectPhasors = (
-                reflectPls * reflectCoeffs * np.exp(1j * random.uniform(0, 2 * np.pi))
+            phases = np.array(
+                [random.uniform(0, 2 * np.pi) for _ in range(len(reflectors))]
             )
+            reflectPhasors = reflectPls * reflectCoeffs * np.exp(1j * phases)
 
             # compute delay indices
             reflectDelaysSamples = [signal.delaySamples(fs, d) for d in reflectDelays]
