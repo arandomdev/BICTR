@@ -1,0 +1,206 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "title": "Scan Region Configuration",
+    "type": "object",
+    "required": [
+      "resultsPath",
+      "workers",
+      "body",
+      "resolution",
+      "scanMode",
+      "scanRegion",
+      "scanTrack",
+      "tx",
+      "txHeight",
+      "rxHeight",
+      "model",
+      "lwchm",
+      "signal",
+      "psk",
+      "projection"
+    ],
+    "properties": {
+      "resultsPath": {
+        "type": "string",
+        "description": "NC file to write to."
+      },
+      "workers": {
+        "type": "integer",
+        "description": "Number of workers to use. -1 for cpu count."
+      },
+      "body": {
+        "type": "string",
+        "description": "The celestial body.",
+        "enum": ["earth", "moon"]
+      },
+      "resolution": {
+        "type": "string",
+        "description": "Resolution of the DEM, refer to PyGMT datasets. Only '01s' was tested."
+      },
+      "scanMode": {
+        "type": "string",
+        "description": "Scan mode to use. When set to region, scanRegion must be set. When set to track, scanTrack must be set.",
+        "enum": ["region", "track"]
+      },
+      "scanRegion": {
+        "type": ["array", "null"],
+        "description": "Coordinates of the region to scan. Array of two coordinates (SW, NE). Each coordinate is an array with two elements (longitude, latitude).",
+        "items": {
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "scanTrack": {
+        "type": ["null", "string"],
+        "description": "Path to track NC file."
+      },
+      "tx": {
+        "type": "array",
+        "description": "The coordinates of the transmitter (lon, lat).",
+        "items": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "txHeight": {
+        "type": "number",
+        "description": "Height of the transmitter above the ground."
+      },
+      "rxHeight": {
+        "type": "number",
+        "description": "Height of the receivers above the ground."
+      },
+      "model": {
+        "type": "string",
+        "description": "The channel model to run. Must be set to lwchm",
+        "enum": ["lwchm"]
+      },
+      "lwchm": {
+        "type": "object",
+        "required": [
+          "refCount",
+          "refAttemptPerRing",
+          "ringRadiusMin",
+          "ringRadiusMax",
+          "ringRadiusUncertainty",
+          "ringCount",
+          "complexRelPermittivityReal",
+          "complexRelPermittivityRealStd",
+          "complexRelPermittivityImag",
+          "complexRelPermittivityImagStd",
+          "horizontalPolarization",
+          "fadingPaths",
+          "fadingDopplerSpread"
+        ],
+        "properties": {
+          "refCount": {
+            "type": "integer",
+            "description": "Number of reflector to try to find."
+          },
+          "refAttemptPerRing": {
+            "type": "integer",
+            "description": "Number of reflectors to try find in each ring."
+          },
+          "ringRadiusMin": {
+            "type": "number",
+            "description": "Low bound of the the search space."
+          },
+          "ringRadiusMax": {
+            "type": "number",
+            "description": "High bound of the search space."
+          },
+          "ringRadiusUncertainty": {
+            "type": "number",
+            "description": "Random offset from a ring to add to a reflector."
+          },
+          "ringCount": {
+            "type": "integer",
+            "description": "The number of rings to generate."
+          },
+          "complexRelPermittivityReal": {
+            "type": "number"
+          },
+          "complexRelPermittivityRealStd": {
+            "type": "number"
+          },
+          "complexRelPermittivityImag": {
+            "type": "number"
+          },
+          "complexRelPermittivityImagStd": {
+            "type": "number"
+          },
+          "horizontalPolarization": {
+            "type": "boolean",
+            "description": "If the antenna are horizontally polarized."
+          },
+          "fadingPaths": {
+            "type": "integer",
+            "description": "Number of fading paths to use when generating the Rayleigh fading. Should be an integer multiple of 4."
+          },
+          "fadingDopplerSpread": {
+            "type": "number",
+            "description": "The relative speed between the transmitter and receiver to use when generating Rayleigh fading."
+          }
+        }
+      },
+      "signal": {
+        "type": "string",
+        "description": "The signal type to generate, only qpsk was tested.",
+        "enum": ["qpsk"]
+      },
+      "psk": {
+        "type": "object",
+        "required": [
+          "data",
+          "symbolPeriod",
+          "fs",
+          "carrFs",
+          "transmitPower"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "Base64 encoded string of the data to encode."
+          },
+          "symbolPeriod": {
+            "type": "number",
+            "description": "Symbol period in seconds"
+          },
+          "fs": {
+            "type": "number",
+            "description": "Sampling frequency of the system in Hz/"
+          },
+          "carrFs": {
+            "type": "number",
+            "description": "Carrier frequency of the signal."
+          },
+          "transmitPower": {
+            "type": "number",
+            "description": "Transmitter power in dBm."
+          }
+        }
+      },
+      "projection": {
+        "type": "string",
+        "description": "The projection to use when plotting results. Refer to PyGMT."
+      }
+    }
+  }
+  

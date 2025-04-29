@@ -4,12 +4,12 @@ data/
 
 __pycache__
 
-*.sdf
-*site_report.txt
-dcf
-.lcf
-*.ppm
-*.kml
-*.png
-*.kmz
-*.zip
+scripts/splat/**/*.sdf
+scripts/splat/**/*site_report.txt
+scripts/splat/**/dcf
+scripts/splat/**/.lcf
+scripts/splat/**/*.ppm
+scripts/splat/**/*.kml
+scripts/splat/**/*.png
+scripts/splat/**/*.kmz
+scripts/splat/**/*.zip
