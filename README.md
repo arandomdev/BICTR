@@ -51,3 +51,7 @@ This script takes the NC files from BICTR (fast), BICTR (aggressive), ITM, and I
 * `propagation.py`, contains some utilities functions used to compute propagation effects.
 * `signal.py`, contains classes and functions to generate and work with signals.
 * `spatial.py`, contains classes to work with terrain data and coordinates.
+
+Before the model can be initialized, a `spatial.Body` object needs to be created. The `Body` class expects the body type (earth or moon), a resolution string (currently only "01m" and "01s") are supported, and two coordinates to define the region to load. the first coordinate should be the SW point, and the second should be the NE point. Then this `body` object along with a channel configuration is passed to `LWCHM` when instantiated.
+
+To run the model, the transmitted signal should be defined. There are functions in `signal` to generate BPSK and QPSK signals. This transmitted signal is then used in `LWCHM.compute` to run the model. The received signal is returned, or `None` if the model determines if there is no reception.
