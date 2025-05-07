@@ -7,9 +7,10 @@ import numpy.typing as npt
 
 @dataclass
 class TransmitSignal(object):
-    wave: npt.NDArray[np.float64]  # raw wave samples
+    wave: npt.NDArray[np.complex128]  # raw wave samples
     fs: float  # sampling frequency
     carrierFs: float  # carrier frequency
+    modulated: bool
 
 
 @dataclass
@@ -24,6 +25,7 @@ class PSKConfiguration(object):
     fs: float
     carrFs: float
     transmitPower: float
+    modulate: bool
 
 
 def delaySamples(fs: float, delay: float | np.floating[Any]) -> int:
@@ -55,16 +57,21 @@ def generateBPSKSignal(config: PSKConfiguration) -> TransmitSignal:
             phases[i * 8 + j] = np.pi if (byte >> j) & 0x1 else 0
 
     # upsample to sampling freq
-    samplesPerBit = int(config.symbolPeriod / (1 / config.fs))
+    samplesPerBit = round(config.symbolPeriod / (1 / config.fs))
     phasesUpsampled = np.repeat(phases, samplesPerBit)
 
-    # Modulate
-    t = np.arange(0, len(phasesUpsampled)) / config.fs
-    signal = amp * np.cos((2 * np.pi * config.carrFs * t) + phasesUpsampled)
+    if config.modulate:
+        # Modulate
+        t = np.arange(0, len(phasesUpsampled)) / config.fs
+        signal = amp * np.cos((2 * np.pi * config.carrFs * t) + phasesUpsampled)
+    else:
+        signal = amp * np.exp(1j * phasesUpsampled) / np.sqrt(2)
+
     return TransmitSignal(
         wave=signal,
         fs=config.fs,
         carrierFs=config.carrFs,
+        modulated=config.modulate,
     )
 
 
@@ -80,23 +87,28 @@ def generateQPSKSignal(config: PSKConfiguration) -> TransmitSignal:
     amp = np.power(10, config.transmitPower / 20) * np.sqrt(1e-3)
 
     # convert to frequency array
-    phaseMap = (np.pi / 4, 3 * np.pi / 4, 7 * np.pi / 4, 5 * np.pi / 4)
+    phaseMap = (np.pi / 4, 3 * np.pi / 4, 5 * np.pi / 4, 7 * np.pi / 4)
     phases = np.zeros(len(config.data) * 4)
     for i, byte in enumerate(config.data):
         for j in range(4):
             phases[i * 4 + j] = phaseMap[(byte >> (j * 2)) & 0x3]
 
     # upsample to sampling freq
-    samplesPerBit = int(config.symbolPeriod / (1 / config.fs))
+    samplesPerBit = round(config.symbolPeriod / (1 / config.fs))
     phasesUpsampled = np.repeat(phases, samplesPerBit)
 
-    # Modulate
-    t = np.arange(0, len(phasesUpsampled)) / config.fs
-    signal = amp * np.cos((2 * np.pi * config.carrFs * t) + phasesUpsampled)
+    if config.modulate:
+        # Modulate
+        t = np.arange(0, len(phasesUpsampled)) / config.fs
+        signal = amp * np.cos((2 * np.pi * config.carrFs * t) + phasesUpsampled)
+    else:
+        signal = amp * np.exp(1j * phasesUpsampled) / np.sqrt(2)
+
     return TransmitSignal(
         wave=signal,
         fs=config.fs,
         carrierFs=config.carrFs,
+        modulated=config.modulate,
     )
 
 
