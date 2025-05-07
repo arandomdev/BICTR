@@ -225,7 +225,7 @@ def computeGlobalDiffExtrema(siteDiffData: SiteData) -> tuple[float, float]:
     return min(mins), max(maxs)
 
 
-def createCombinedDiffFigure(
+def createCombinedFigure(
     siteData: SiteData,
     conf: ProgramConfig,
     bodies: dict[Site, spatial.Body],
@@ -233,24 +233,31 @@ def createCombinedDiffFigure(
     scaleMax: float,
     isDiff: bool,
 ):
-    for site, sources in siteData.items():
+    fig = pygmt.Figure()
+    pygmt.makecpt(  # type: ignore
+        cmap="jet",
+        series=[
+            scaleMin,
+            scaleMax,
+            0.01,
+        ],
+        continuous=True,
+    )
+
+    for i, (site, sources) in enumerate(siteData.items()):
+        if i == 1:
+            fig.shift_origin(xshift="w+2c")
+        elif i == 2:
+            fig.shift_origin(xshift="-w-2c", yshift="-h-2.5c")
+        elif i == 3:
+            fig.shift_origin(xshift="w+2c")
+
         region = [
             conf.sites[site].viewRegion[0].lon,
             conf.sites[site].viewRegion[1].lon,
             conf.sites[site].viewRegion[0].lat,
             conf.sites[site].viewRegion[1].lat,
         ]
-
-        fig = pygmt.Figure()
-        pygmt.makecpt(  # type: ignore
-            cmap="jet",
-            series=[
-                scaleMin,
-                scaleMax,
-                0.01,
-            ],
-            continuous=True,
-        )
 
         title = f"{SITE_NAME_MAP[site]} Diff" if isDiff else f"{SITE_NAME_MAP[site]}"
         with fig.subplot(  # type: ignore
@@ -319,24 +326,24 @@ def createCombinedDiffFigure(
                     region=region,
                 )
 
-        if isDiff:
-            fig.colorbar(  # type: ignore
-                frame=["x+lSignal Strength", "y+lΔdBm"], position="JBC+o0c/1c"
-            )
-        else:
-            fig.colorbar(  # type: ignore
-                frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o0c/1c"
-            )
+    if isDiff:
+        fig.colorbar(  # type: ignore
+            frame=["x+lSignal Strength", "y+lΔdBm"], position="JBC+o-7.25c/1c"
+        )
+    else:
+        fig.colorbar(  # type: ignore
+            frame=["x+lSignal Strength", "y+ldBm"], position="JBC+o-7.25c/1c"
+        )
 
-        if not conf.suppressFigures:
-            fig.show()  # type: ignore
+    if not conf.suppressFigures:
+        fig.show()  # type: ignore
 
-        if isDiff:
-            outputPath = conf.output / SITE_PATH_MAP[site] / "combinedDiff.png"
-        else:
-            outputPath = conf.output / SITE_PATH_MAP[site] / "combined.png"
-        outputPath.parent.mkdir(exist_ok=True, parents=True)
-        fig.savefig(outputPath)  # type: ignore
+    if isDiff:
+        outputPath = conf.output / "combinedDiff.png"
+    else:
+        outputPath = conf.output / "combined.png"
+    outputPath.parent.mkdir(exist_ok=True, parents=True)
+    fig.savefig(outputPath)  # type: ignore
 
 
 def createIndividualFigures(
@@ -441,8 +448,8 @@ def main() -> None:
     recordStats(conf, siteDiffData)
 
     minDiff, maxDiff = computeGlobalDiffExtrema(siteDiffData)
-    createCombinedDiffFigure(maskedSiteData, conf, bodies, -150, 0, False)
-    createCombinedDiffFigure(siteDiffData, conf, bodies, minDiff, maxDiff, True)
+    createCombinedFigure(maskedSiteData, conf, bodies, -150, 0, False)
+    createCombinedFigure(siteDiffData, conf, bodies, minDiff, maxDiff, True)
     createIndividualFigures(maskedSiteData, conf, bodies, -150, 0, False)
     createIndividualFigures(siteDiffData, conf, bodies, minDiff, maxDiff, True)
 

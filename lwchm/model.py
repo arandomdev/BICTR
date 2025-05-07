@@ -50,8 +50,12 @@ class LWCHM(object):
 
     def _generateReflectors(
         self,
+        fs: float,
+        excludeDelaySamples: set[int],
         txCoord: spatial.PointGeo,
+        txLoc: spatial.Point3D,
         rxCoord: spatial.PointGeo,
+        rxLoc: spatial.Point3D,
         txHeight: float,
         rxHeight: float,
     ) -> tuple[list[spatial.Point3D], list[spatial.PointGeo]]:
@@ -61,6 +65,10 @@ class LWCHM(object):
         ringRadiusMax = self._config.ringRadiusMax
         ringRadiusUncertainty = self._config.ringRadiusUncertainty
         ringCount = self._config.ringCount
+
+        excludedDelays = set(excludeDelaySamples)
+        txLocArr = np.array(txLoc)
+        rxLocArr = np.array(rxLoc)
 
         rCoords: list[spatial.PointGeo] = []
         currRadius = ringRadiusMin
@@ -75,12 +83,26 @@ class LWCHM(object):
                 )
                 theta = random.uniform(0, 2 * np.pi)
                 rCoord = self._body.destination(rxCoord, theta, r)
+                rLoc = self._body.geoTo3D(
+                    rCoord, self._body.getHeights(np.array([rCoord]))[0]
+                )
+
+                # Check if the reflector would overlap with each other
+                rDist = np.linalg.norm(txLocArr - np.array(rLoc)) + np.linalg.norm(
+                    np.array(rLoc) - rxLocArr
+                )
+                rDelaySamples = signal.delaySamples(
+                    fs, rDist / constants.speed_of_light
+                )
+                if rDelaySamples in excludedDelays:
+                    continue
 
                 # Check LOS
                 if self._body.checkLOS(
                     txCoord, txHeight, rCoord, 0
                 ) and self._body.checkLOS(rCoord, 0, rxCoord, rxHeight):
                     rCoords.append(rCoord)
+                    excludedDelays.add(rDelaySamples)
                     if len(rCoords) == refCount:
                         break
 
@@ -162,7 +184,7 @@ class LWCHM(object):
         txLocArr = np.array(txLoc)
         rxLocArr = np.array(rxLoc)
 
-        delayPaths: dict[int, np.complex128] = {}  # delay in filter coeffs: phasor
+        delayPaths: dict[np.float64, np.complex128] = {}  # time delay and phasor
 
         # Compute LOS delay path
         losDist = np.linalg.norm(txLocArr - rxLocArr)
@@ -170,11 +192,19 @@ class LWCHM(object):
         losPl = propagation.freeSpacePathloss(carrFs, losDist)
         if self._body.checkLOS(txCoord, txHeight, rxCoord, rxHeight):
             losPhasor = losPl * np.exp(-1j * 2 * np.pi * carrFs * losDelay)
-            losDelaySamples = signal.delaySamples(fs, losDelay)
-            delayPaths[losDelaySamples] = losPhasor
+            delayPaths[losDelay] = losPhasor
 
         # Compute reflector delay paths
-        reflectors = self._generateReflectors(txCoord, rxCoord, txHeight, rxHeight)[0]
+        reflectors = self._generateReflectors(
+            fs,
+            set((signal.delaySamples(fs, d) for d in delayPaths)),
+            txCoord,
+            txLoc,
+            rxCoord,
+            rxLoc,
+            txHeight,
+            rxHeight,
+        )[0]
         if reflectors:
             # Get path distances
             refsArr = np.array(reflectors)
@@ -241,24 +271,26 @@ class LWCHM(object):
             )
             reflectPhasors = reflectPls * reflectCoeffs * np.exp(1j * phases)
 
-            # compute delay indices
-            reflectDelaysSamples = [signal.delaySamples(fs, d) for d in reflectDelays]
-
-            for delay, phasor in zip(reflectDelaysSamples, reflectPhasors):
-                if delay in delayPaths:
-                    delayPaths[delay] += phasor
-                else:
-                    delayPaths[delay] = phasor
+            delayPaths.update(zip(reflectDelays, reflectPhasors))
 
         if delayPaths:
-            # Shift all delays to index zero for efficiency
-            delayOffset = min(delayPaths.keys())
-            maxDelay = max(delayPaths.keys())
+            # Apply complex baseband conversion
+            if not txSig.modulated:
+                minDelay = np.min([d for d in delayPaths])
+                for i, (delay, phasor) in enumerate(delayPaths.items()):
+                    delayPaths[delay] = phasor * np.exp(
+                        -1j * 2 * np.pi * carrFs * (delay - minDelay)
+                    )
+
+            # Compute delay samples
+            delaySamples = [signal.delaySamples(fs, d) for d in delayPaths]
+            delayOffset = min(delaySamples)
+            maxDelay = max(delaySamples)
 
             # Construct fir filter
             firCoeffs = np.zeros(maxDelay - delayOffset + 1, dtype=np.complex128)
-            for delay, phasor in delayPaths.items():
-                firCoeffs[delay - delayOffset] = phasor
+            for delaySample, (_, phasor) in zip(delaySamples, delayPaths.items()):
+                firCoeffs[delaySample - delayOffset] = phasor
 
             # Add rayleigh
             rayleighSig = (
@@ -266,6 +298,10 @@ class LWCHM(object):
                 * losPl
                 / len(firCoeffs)
             )
+            if not txSig.modulated:
+                rayleighSig *= np.exp(
+                    -1j * 2 * np.pi * carrFs * np.arange(0, len(firCoeffs)) / fs
+                )
             firCoeffs += rayleighSig
 
             firCoeffs /= self._config.refCount + 1
