@@ -5,7 +5,7 @@ import numpy.typing as npt
 import pygmt  # type: ignore
 
 RADIUS_MAP = {"moon": 1737.4e3, "earth": 6378137.0}
-RESOLUTION_MAP = {"01m": 1 / 60, "01s": 1 / 3600}
+RESOLUTION_MAP = {"10m": 1 / 6, "05m": 1 / 12, "01m": 1 / 60, "01s": 1 / 3600}
 
 
 class Point3D(object):
@@ -135,10 +135,10 @@ class Body(object):
         extraSizeDeg = np.rad2deg(extraSize / self.radius)
 
         region = [
-            coord1.lon - extraSizeDeg,
-            coord2.lon + extraSizeDeg,
-            coord1.lat - extraSizeDeg,
-            coord2.lat + extraSizeDeg,
+            max(-180, coord1.lon - extraSizeDeg),
+            min(180, coord2.lon + extraSizeDeg),
+            max(-90, coord1.lat - extraSizeDeg),
+            min(90, coord2.lat + extraSizeDeg),
         ]
 
         if body == "moon":

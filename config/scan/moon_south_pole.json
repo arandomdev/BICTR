@@ -2,28 +2,19 @@
     "resultsPath": "data/lwchm/moon_south_pole.nc",
     "workers": -1,
     "body": "moon",
-    "resolution": "01m",
-    "viewRegion": [
+    "resolution": "10m",
+    "scanMode": "region",
+    "scanRegion": [
         [
             -180,
             -90
         ],
         [
             180,
-            -88.5
+            -86
         ]
     ],
-    "scanRegion": [
-        [
-            -180,
-            -89.99
-        ],
-        [
-            180,
-            -89
-        ]
-    ],
-    "scanBlockSize": 0.1,
+    "scanTrack": null,
     "tx": [
         -180,
         -90
@@ -33,9 +24,9 @@
     "model": "lwchm",
     "lwchm": {
         "refCount": 5,
-        "refAttemptPerRing": 5,
+        "refAttemptPerRing": 3,
         "ringRadiusMin": 5,
-        "ringRadiusMax": 500,
+        "ringRadiusMax": 300,
         "ringRadiusUncertainty": 15,
         "ringCount": 10,
         "complexRelPermittivityReal": 2.75,
@@ -46,12 +37,14 @@
         "fadingPaths": 1024,
         "fadingDopplerSpread": 1
     },
-    "signal": "bpsk",
+    "signal": "qpsk",
     "psk": {
         "data": "ZGVhZGJlZWY=",
-        "symbolPeriod": 2.85714e-9,
-        "fs": 7e9,
-        "carrFs": 500e6,
-        "transmitPower": 20
-    }
+        "symbolPeriod": 3.333333e-7,
+        "fs": 61.44e6,
+        "carrFs": 913e6,
+        "transmitPower": 30,
+        "modulate": true
+    },
+    "projection": "G0/-90/15c"
 }

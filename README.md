@@ -12,6 +12,10 @@ There are several scripts used for running BICTR, running other models, and data
 ### scan_region.py
 This script uses runs BICTR over an area to create a coverage map. The script expects a single argument to a config file. The configuration file is a json formatted file, and a [schema file](schema/scan.schema.json) is provided. Several configuration files are provided in `config/scan`, and can be used as an reference.
 
+```
+python .\scripts\scan_region.py .\config\scan\baseband\siteA_aggressive.json
+```
+
 There are two modes of operation. The region scan mode uses a defined coordinate box and runs BICTR at each point in the box. This is used for wide scale coverage map generation. The other mode is the track mode, which uses a provided track file. The track file is similar to a mask file, where points of interest have a finite value, while other points are set to nan. The track mode is used for targeted point predictions.
 
 An important set of parameters for BICTR is the reflector search parameters. Two recommended configurations are configured. The fast computation mode is use for faster evaluation of a wide area. The aggressive search mode is used for highly chaotic terrain with reduced LOS at the cost of being slower.
