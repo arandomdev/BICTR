@@ -1,6 +1,7 @@
 import argparse
 import csv
 import enum
+import itertools
 import json
 import pathlib
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from typing import Any, cast
 import numpy as np
 import pygmt  # type: ignore
 import xarray as xr
+from scipy.stats import ttest_rel  # type: ignore
 
 from lwchm import spatial
 
@@ -85,6 +87,7 @@ class ProgramConfig(object):
     output: pathlib.Path
     sites: dict[Site, SiteConfig]
 
+    skipFigures: bool
     suppressFigures: bool
 
 
@@ -111,6 +114,7 @@ def getSiteConfig(rawConf: dict[str, Any], site: str) -> SiteConfig:
 def getConfig() -> ProgramConfig:
     parser = argparse.ArgumentParser("compare_data.py")
     parser.add_argument("config", type=pathlib.Path)
+    parser.add_argument("--skip-figures", action=argparse.BooleanOptionalAction)
     parser.add_argument("--suppress-figures", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
@@ -125,6 +129,7 @@ def getConfig() -> ProgramConfig:
             Site.K: getSiteConfig(rawConf, "siteK"),
             Site.L: getSiteConfig(rawConf, "siteL"),
         },
+        skipFigures=args.skip_figures,
         suppressFigures=args.suppress_figures,
     )
 
@@ -213,6 +218,52 @@ def recordStats(conf: ProgramConfig, siteDiffs: SiteData) -> None:
             )
 
             writer.writerows(rows)
+
+    with open(conf.output / "p_values.csv", mode="w", newline="") as csvFile:
+        pairs = itertools.permutations(SOURCE_DIFF_PATH_MAP.keys(), 2)
+        pValues: dict[Source, dict[Source, float]] = {
+            s: {} for s in SOURCE_DIFF_PATH_MAP.keys()
+        }
+
+        for aSource, bSource in pairs:
+            # Compute number of elements
+            aData = np.zeros(sum(s[aSource].size for s in siteDiffs.values()))
+            bData = np.zeros(sum(s[bSource].size for s in siteDiffs.values()))
+            assert aData.shape == bData.shape
+
+            # Copy data
+            offset = 0
+            for s in siteDiffs.values():
+                assert s[aSource].shape == s[bSource].shape
+                size = s[aSource].size
+                aData[offset : offset + size] = abs(s[aSource].values.ravel())  # type: ignore
+                bData[offset : offset + size] = abs(s[bSource].values.ravel())  # type: ignore
+                offset += size
+
+            pValues[aSource][bSource] = ttest_rel(aData, bData, nan_policy="omit")[1]  # type: ignore
+
+        # Print table
+        print("\n           P-Values|", end="")
+        for colSource in Source:
+            if colSource == Source.DRATS:
+                continue
+            print(f"{SOURCE_NAME_MAP[colSource]:>19}|", end="")
+        print("\n", "-" * 100, sep="")
+
+        for colSource in Source:
+            if colSource == Source.DRATS:
+                continue
+
+            print(f"{SOURCE_NAME_MAP[colSource]:>19}|", end="")
+            for rowSource in Source:
+                if rowSource == Source.DRATS:
+                    continue
+                if rowSource == colSource:
+                    print("                   |", end="")
+                    continue
+
+                print(f"{pValues[colSource][rowSource]:>19.5e}|", end="")
+            print()
 
 
 def computeGlobalDiffExtrema(siteDiffData: SiteData) -> tuple[float, float]:
@@ -446,6 +497,9 @@ def main() -> None:
 
     # Stats
     recordStats(conf, siteDiffData)
+
+    if conf.skipFigures:
+        return
 
     minDiff, maxDiff = computeGlobalDiffExtrema(siteDiffData)
     createCombinedFigure(maskedSiteData, conf, bodies, -150, 0, False)
